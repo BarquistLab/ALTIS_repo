@@ -1,0 +1,285 @@
+---
+title: "Shigella_tradis_infections_ZINB"
+author: "Laura Jenniches"
+date: "14/1/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r global-options, include=FALSE}
+# set result directory for plots etc.
+res_dir <- "../results/TraDIS_genomic_positions/"
+data_dir <- "../data/"
+
+# load meta data for Shigella
+meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)
+seq_list <- unique(meta_data$seq)
+n_seq <- length(seq_list)
+meta_data$length <- meta_data$end - meta_data$start + 1
+# origin of replication
+# Genome: upstream of dnaA
+oriG <- subset(meta_data, com_id=="dnaA")$end + 1
+# Plasmid: upstream of repA
+# https://www.frontiersin.org/articles/10.3389/fmicb.2018.02686/full
+oriP <- subset(meta_data, com_id=="repA")$end + 1
+ipaJ <- subset(meta_data, com_id=="ipaJ")$end
+spa_orf10 <- subset(meta_data, com_id=="spa-orf10")$start
+```
+
+```{r setup, results="hide"}
+## CRAN
+library(knitr)
+
+library(ggplot2)
+library(pheatmap)
+library(viridis)
+library(ggrastr)
+library(ggrepel)
+
+library(tidyverse)
+library(data.table)
+
+library(cmdstanr)
+library(bayesplot)
+library(posterior)
+library(rstan)
+
+library(devEMF)
+
+source("../utils/prepare_data.R")
+source("../utils/analyze_stanfit.R")
+source("../utils/utils.R")
+
+library(extrafont)
+# font_import("y")
+# fonts()
+loadfonts()
+
+theme_set(theme_bw(base_size = 10, base_family="Arial"))
+
+cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
+cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
+cb_palette3 <- c("gray", "#d36c6c", "#5876A3")
+```
+
+data_table_pos contains TIS on the positive strand, data_table_neg on the negative strand. TIS on the reverse strand are assigned to the same gene as on the forward strand
+
+```{r}
+data_table_pos <- fread(paste(data_dir, "shigella_infections_counts_pos_meta.csv", sep=""), quote=F, data.table=F)
+data_table_neg <- fread(paste(data_dir, "shigella_infections_counts_neg_meta.csv", sep=""), quote=F, data.table=F)
+
+data_table_pos$TI <- paste(data_table_pos$seq, data_table_pos$pos, "pos", sep="_")
+data_table_neg$TI <- paste(data_table_neg$seq, data_table_neg$pos, "neg", sep="_")
+
+data_table <- rbind(data_table_pos, data_table_neg)
+
+data_meta <- data_table %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
+read_counts <- data_table %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type", "TI"))
+
+pilot_TIS_in <- fread(paste(data_dir2, "shigella_tradis/edgeR/TraDIS_counts.csv", sep=""), data.table = F, stringsAsFactors = F)
+pilot_TIS_counts <- pilot_TIS_in %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type"))
+```
+
+Figure S1B
+
+```{r}
+plot_df <- pilot_TIS_in %>% subset(seq=="CP037923.1") %>% mutate(bin=ceiling(pos/1000)*1000)
+plot_df$tot_reads <- rowSums(pilot_TIS_counts[pilot_TIS_in$seq=="CP037923.1", grep("Min", colnames(pilot_TIS_counts))])
+dfit_int <- plot_df %>% group_by(seq, bin)
+base_data <- dfit_int %>% group_by(seq) %>% summarise(x_min=min(bin), x_max=max(bin))
+base_data$x_min[which(base_data$seq=="CP037923.1")] <- 0
+
+offset <- 40
+dfit_int_n1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(tot_reads)+1))
+
+p_chrom <- ggplot() +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=height_in), col=cb_palette3[1], size=0.1, alpha=1, data=dfit_int_n1) +
+  scale_x_continuous(label=fancy_scientific) +
+  geom_vline(xintercept=oriG, col=cb_palette3[2]) +
+  coord_polar() +
+  scale_color_manual(values=cb_palette[c(1,3)]) +
+  theme_minimal() +
+  # scale_x_continuous(expand=c(0,0)) +
+  ylim(c(-offset, max(dfit_int_n1$height_in))) +
+  theme(
+    rect=element_rect(fill="transparent"),
+    legend.position = "none",
+    legend.title=element_blank(),
+    legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.4,"cm"),legend.margin=margin(t=0.5, b=0.5, unit="cm"),
+    axis.text.y = element_blank(),
+    axis.text.x=element_text(size=9),
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = unit(rep(-0.7,5), "cm")
+  ) +
+  geom_segment(data=base_data, aes(x = x_min, y = -2, xend = x_max, yend = -2), alpha=0.8, size=0.6, inherit.aes = FALSE)  +
+  geom_text(data=base_data, aes(x = (x_min + x_max)/2, y = -30, label="Chromosome"),  alpha=0.8, inherit.aes = FALSE) +
+  geom_text(data=base_data, aes(x=oriG, y=9), label="ori", inherit.aes = FALSE, col=cb_palette3[2], size=3.5)
+print(p_chrom)
+pdf(paste(res_dir, "chrom_TI_pilot_in.pdf", sep=""), width = 3.8, height = 2.2)
+print(p_chrom)
+dev.off()
+```
+
+```{r}
+plot_df <- pilot_TIS_in %>% subset(seq=="CP037924.1") %>% mutate(bin=ceiling(pos/100)*100)
+plot_df$tot_reads <- rowSums(pilot_TIS_counts[pilot_TIS_in$seq=="CP037924.1", grep("Min", colnames(pilot_TIS_counts))])
+dfit_int <- plot_df %>% group_by(seq, bin)
+base_data <- dfit_int %>% group_by(seq) %>% summarise(x_min=min(bin), x_max=max(bin))
+base_data$x_min[which(base_data$seq=="CP037924.1")] <- 0
+
+offset <- 25
+dfit_int_n1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(tot_reads)+1))
+
+p_plas <- ggplot() +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=height_in), col=cb_palette3[1], size=0.1, alpha=1, data=dfit_int_n1) +
+  scale_x_continuous(label=fancy_scientific) +
+  geom_vline(xintercept=oriP, col=cb_palette3[2]) +
+  coord_polar() +
+  scale_color_manual(values=cb_palette[c(1,3)]) +
+  theme_minimal() +
+  # scale_x_continuous(expand=c(0,0)) +
+  ylim(c(-offset, max(dfit_int_n1$height_in))) +
+  theme(
+    rect=element_rect(fill="transparent"),
+    legend.position = "none",
+    legend.title=element_blank(),
+    legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.4,"cm"),legend.margin=margin(t=0.5, b=0.5, unit="cm"),
+    axis.text.x=element_text(size=9),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = unit(rep(-0.7,5), "cm")
+  ) +
+  geom_segment(data=base_data, aes(x = x_min, y = -1, xend = x_max, yend = -1), alpha=0.8, size=0.6, inherit.aes = FALSE)  +
+  geom_segment(data=base_data, aes(x = spa_orf10, y = -3, xend = ipaJ, yend = -3), col=cb_palette3[2], size=0.6, inherit.aes = FALSE) +
+  geom_text(data=base_data, aes(x = (x_min + x_max)/2, y = -20, label="pINV"),  alpha=0.8, inherit.aes = FALSE) +
+  geom_text(data=base_data, aes(x=oriP, y=9), label="ori", inherit.aes = FALSE, col=cb_palette3[2], size=3.5) +
+  geom_text(data=base_data, aes(x=(spa_orf10 + ipaJ)/2, y=-6), label="ER", inherit.aes = FALSE, col=cb_palette3[2], size=3)
+print(p_plas)
+pdf(paste(res_dir, "plasmid_TI_pilot_in.pdf", sep=""), width = 3.8, height = 2.2)
+print(p_plas)
+dev.off()
+```
+
+```{r}
+# extract the legend from one of the plots
+legend <- cowplot::get_legend(
+  # create some space to the left of the legend
+  p_chrom +
+    guides(color = guide_legend(col = 1)) +
+    theme(legend.position = "right")
+)
+
+p_2B <- cowplot::plot_grid(
+  p_chrom, p_plas, scale=0.7, ncol=1, rel_heights=c(0.7, 0.3))
+print(p_2B)
+cairo_pdf(paste(res_dir, "figureS1B.pdf", sep=""), width = 2, height = 3.6)
+print(p_2B)
+dev.off()
+```
+
+Figure 2B
+
+```{r}
+plot_df <- data_table %>% subset(seq=="CP037923") %>% mutate(bin=ceiling(pos/1000)*1000)
+plot_df$tot_reads <- rowSums(read_counts[data_table$seq=="CP037923", grep("INPUT", colnames(read_counts))])
+dfit_int <- plot_df %>% group_by(seq, bin)
+base_data <- dfit_int %>% group_by(seq) %>% summarise(x_min=min(bin), x_max=max(bin))
+base_data$x_min[which(base_data$seq=="CP037923")] <- 0
+
+offset <- 40
+dfit_int_n1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(tot_reads)+1))
+dfit_int_1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(Lib1_INPUT)+1))
+
+p_chrom <- ggplot() +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=height_in, col="Lib1-43"), size=0.1, alpha=1, data=dfit_int_n1) +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=2*height_in, col="Lib1"), size=0.1, alpha=1, data=dfit_int_1) +
+  scale_x_continuous(label=fancy_scientific) +
+  coord_polar() +
+  scale_color_manual(values=cb_palette3[c(3,1)]) +
+  theme_minimal() +
+  geom_vline(xintercept=oriG, col=cb_palette3[2]) +
+  ylim(c(-offset, max(dfit_int_n1$height_in))) +
+  theme(
+    rect=element_rect(fill="transparent"),
+    legend.position = "none",
+    legend.title=element_blank(),
+    legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.4,"cm"),legend.margin=margin(t=0.5, b=0.5, unit="cm"),
+    axis.text.x=element_text(size=9),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = unit(rep(-0.7,5), "cm")
+  ) +
+  geom_segment(data=base_data, aes(x = x_min, y = -2, xend = x_max, yend = -2), alpha=0.8, size=0.6, inherit.aes = FALSE)  +
+  geom_text(data=base_data, aes(x = (x_min + x_max)/2, y = -30, label="Chromosome"),  alpha=0.8, inherit.aes = FALSE) +
+  geom_text(data=base_data, aes(x=oriG, y=9), label="ori", inherit.aes = FALSE, col=cb_palette3[2], size=3.5)
+print(p_chrom)
+pdf(paste(res_dir, "chrom_TI_in.pdf", sep=""), width = 3.8, height = 2.2)
+print(p_chrom)
+dev.off()
+```
+
+```{r}
+plot_df <- data_table %>% subset(seq=="CP037924") %>% mutate(bin=ceiling(pos/100)*100)
+plot_df$tot_reads <- rowSums(read_counts[data_table$seq=="CP037924", grep("INPUT", colnames(read_counts))])
+dfit_int <- plot_df %>% group_by(seq, bin)
+base_data <- dfit_int %>% group_by(seq) %>% summarise(x_min=min(bin), x_max=max(bin))
+base_data$x_min[which(base_data$seq=="CP037924")] <- 0
+
+offset <- 25
+dfit_int_n1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(tot_reads)+1))
+dfit_int_1 <- plot_df %>% group_by(seq, bin) %>% summarise(height_in=log(sum(Lib1_INPUT)+1))
+
+p_plas <- ggplot() +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=height_in, col="Lib1-43"), size=0.1, alpha=1, data=dfit_int_n1) +
+  geom_segment(aes(x=bin, xend=bin, y=0, yend=2*height_in, col="Lib1"), size=0.1, alpha=1, data=dfit_int_1) +
+  geom_vline(xintercept=oriP, col=cb_palette3[2]) +
+  scale_x_continuous(label=fancy_scientific) +
+  coord_polar() +
+  scale_color_manual(values=cb_palette3[c(3,1)]) +
+  theme_minimal() +
+  # scale_x_continuous(expand=c(0,0)) +
+  ylim(c(-offset, max(dfit_int_n1$height_in))) +
+  theme(
+    rect=element_rect(fill="transparent"),
+    legend.position = "none",
+    legend.title=element_blank(),
+    legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.4,"cm"),legend.margin=margin(t=0.5, b=0.5, unit="cm"),
+    axis.text.x=element_text(size=9),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = unit(rep(-0.7,5), "cm")
+  ) +
+  geom_segment(data=base_data, aes(x = x_min, y = -1, xend = x_max, yend = -1), alpha=0.8, size=0.6, inherit.aes = FALSE)  +
+  geom_text(data=base_data, aes(x = (x_min + x_max)/2, y = -20, label="pINV"),  alpha=0.8, inherit.aes = FALSE)+
+  geom_text(data=base_data, aes(x = (x_min + x_max)/2, y = -20, label="pINV"),  alpha=0.8, inherit.aes = FALSE) +
+  geom_segment(data=base_data, aes(x = spa_orf10, y = -3, xend = ipaJ, yend = -3), col=cb_palette3[2], size=0.6, inherit.aes = FALSE) +
+  geom_text(data=base_data, aes(x=oriP, y=9), label="ori", inherit.aes = FALSE, col=cb_palette3[2], size=3.5) +
+  geom_text(data=base_data, aes(x=(spa_orf10 + ipaJ)/2, y=-6), label="ER", inherit.aes = FALSE, col=cb_palette3[2], size=3)
+print(p_plas)
+pdf(paste(res_dir, "plasmid_TI_in.pdf", sep=""), width = 3.8, height = 2.2)
+print(p_plas)
+dev.off()
+```
+
+```{r}
+# extract the legend from one of the plots
+legend <- cowplot::get_legend(
+  # create some space to the left of the legend
+  p_chrom +
+    guides(color = guide_legend(col = 1)) +
+    theme(legend.position = "right")
+)
+
+p_2B <- cowplot::plot_grid(
+  p_chrom,
+  cowplot::plot_grid(legend, p_plas, scale=c(0.7, 1), ncol=1, rel_heights=c(0.2,0.6)), ncol=2, rel_widths=c(0.7, 0.4), scale=0.7)
+print(p_2B)
+cairo_pdf(paste(res_dir, "figure2B.pdf", sep=""), width = 3.1, height = 1.85)
+print(p_2B)
+dev.off()
+```

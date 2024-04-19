@@ -1,0 +1,441 @@
+---
+title: "Shigella pilot experiments"
+author: "Laura Jenniches"
+date: "17/4/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r global-options, include=FALSE}
+# set result directory for plots etc.
+res_dir <- "../results/normalize_TraDIS_screen/"
+data_dir <- "../data/"
+
+# load meta data for Shigella
+meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)
+seq_list <- unique(meta_data$seq)
+n_seq <- length(seq_list)
+meta_data$length <- meta_data$end - meta_data$start + 1
+```
+
+```{r setup, results="hide"}
+## CRAN
+library(knitr)
+
+library(ggplot2)
+library(pheatmap)
+library(ggcorrplot)
+library(viridis)
+library(ggrastr)
+library(ggrepel)
+
+library(tidyverse)
+library(data.table)
+
+library(cmdstanr)
+library(bayesplot)
+library(posterior)
+library(rstan)
+
+library(devEMF)
+
+library(extrafont)
+# font_import("y")
+# fonts()
+loadfonts()
+
+source("../R/prepare_data.R")
+source("../R/analyze_stanfit.R")
+source("../R/utils.R")
+
+theme_set(theme_bw(base_size = 10, base_family="Arial"))
+
+cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570", "#F0845D")
+cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
+cb_palette3 <- c("#424242", "#d36c6c")
+```
+
+data_table_pos contains TIS on the positive strand, data_table_neg on the negative strand. TIS on the reverse strand are assigned to the same gene as on the forward strand
+
+```{r}
+data_table_pos <- fread(paste(data_dir, "shigella_infections_counts_pos_meta.csv.gz", sep=""), quote=F, data.table=F)
+data_table_neg <- fread(paste(data_dir, "shigella_infections_counts_neg_meta.csv.gz", sep=""), quote=F, data.table=F)
+
+data_table_pos$TI <- paste(data_table_pos$seq, data_table_pos$pos, "pos", sep="_")
+data_table_neg$TI <- paste(data_table_neg$seq, data_table_neg$pos, "neg", sep="_")
+
+data_table <- rbind(data_table_pos, data_table_neg)
+```
+
+```{r}
+data_meta <- data_table %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
+read_counts <- data_table %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type", "TI"))
+
+# number of mutants in input sample
+which(rowSums(read_counts[, grep("INPUT", colnames(read_counts))])>0) %>% length()
+read_counts[read_counts < 20] <- 0
+which(rowSums(read_counts[, grep("INPUT", colnames(read_counts))])>0) %>% length()
+
+data_table <- cbind(data_meta, read_counts)
+data_long <- pivot_longer(data_table, !c("seq", "pos", "locus_tag", "k", "type", "TI"), names_to = "sample", values_to = "raw") %>% subset(raw!=0)
+nz_input_TI <- subset(data_long, grepl("INPUT", sample)) %>% pull(TI)
+plot_df <- data_long %>% subset(TI %in% nz_input_TI) %>% group_by(sample, seq) %>% summarise(reads=sum(raw), n_TI=length(raw))
+plot_df_pseudo <- data_long %>% subset(TI %in% nz_input_TI & type=="pseudo") %>% group_by(sample) %>% summarise(reads=sum(raw), n_TI=length(raw))
+
+plot_df$condition <- "input"
+plot_df$condition[grep("OUTPUT", plot_df$sample)] <- "output"
+plot_df$replicate <- sub("Lib", "", plot_df$sample)
+plot_df$replicate <- sub("_INPUT", "", plot_df$replicate)
+plot_df$replicate <- sub("_OUTPUT", "", plot_df$replicate) %>% as.numeric()
+plot_df_pseudo$condition <- plot_df$condition[match(plot_df_pseudo$sample, plot_df$sample)]
+plot_df_pseudo$replicate <- plot_df$replicate[match(plot_df_pseudo$sample, plot_df$sample)]
+
+plot_df_diff <- plot_df %>% group_by(replicate) %>%
+  summarise(frac0=(sum(n_TI[which(condition=="input")])-sum(n_TI[which(condition=="output")]))/sum(n_TI[which(condition=="input")]))
+plot_df_diff_pseudo <- plot_df_pseudo %>% group_by(replicate) %>% summarise(frac0=(n_TI[1]-n_TI[2])/n_TI[1])
+
+plot_df$seq[which(plot_df$seq=="CP037923")] <- "chrom"
+plot_df$seq[which(plot_df$seq=="CP037924")] <- "plasmid"
+
+plot_df_sum <- plot_df %>% group_by(replicate, condition) %>% summarise(reads=sum(reads))
+plot_df <- plot_df %>% mutate(label=paste0(condition, " (", seq, ")"))
+plot_df$condition_id=((factor(plot_df$condition) %>% as.numeric())-1.5)/2
+plot_df$label <- factor(plot_df$label, levels=c("input (plasmid)", "output (plasmid)", "input (chrom)", "output (chrom)"))
+cb_palette4 <- c(cb_palette3[1], cb_palette3[2], alpha(cb_palette3[1], 0.5), alpha(cb_palette3[2], 0.5))
+color_reads <- "darkred"
+
+plot_df_sum$x <- plot_df_sum$replicate + c(-0.25,0.25)[match(plot_df_sum$condition, c("input", "output"))]
+
+p_size <- ggplot(plot_df) +
+  geom_bar(aes(x=replicate+condition_id, y=n_TI, fill=label, group=condition), stat="identity", position="stack", col="transparent") +
+  geom_line(aes(x=x, y=reads/6000), col=color_reads, data=plot_df_sum) +
+  scale_fill_manual(name="", values=cb_palette4) +
+  scale_x_continuous(expand = c(0.01,0.01), name="replicate", breaks=c(1, 5, 11, (3:8)*5, 43)) +
+  scale_y_continuous(name="# unique IS", labels=fancy_scientific, sec.axis = sec_axis( trans=~.*6000, name="read counts", labels=fancy_scientific)) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.ticks.y.right=element_line(colour=color_reads),
+        axis.text.y.right=element_text(colour=color_reads),
+        axis.title.y.right=element_text(colour=color_reads),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_size)
+cairo_pdf(paste(res_dir, "infection_unique_IS.pdf", sep=""), width = 6.6, height = 2.2)
+print(p_size)
+dev.off()
+
+plot_df2 <- plot_df
+plot_df2$n_TI[plot_df2$replicate==11] <- 0 
+plot_df_sum <- plot_df %>% group_by(replicate, condition) %>% summarise(reads=sum(reads))
+plot_df_sum$x <- plot_df_sum$replicate + c(-0.25,0.25)[match(plot_df_sum$condition, c("input", "output"))]
+p_size_rm11 <- ggplot(plot_df2) +
+  geom_bar(aes(x=replicate+condition_id, y=n_TI, fill=label, group=condition), stat="identity", position="stack", col="transparent") +
+  geom_line(aes(x=x, y=reads/6000), col=color_reads, data=plot_df_sum) +
+  scale_fill_manual(name="", values=c(cb_palette4)) +
+  scale_x_continuous(expand = c(0.01,0.01), name="Library", breaks=c(1, 5, 11, (3:8)*5, 43)) +
+  scale_y_continuous(name="# unique IS", labels=fancy_scientific, sec.axis = sec_axis( trans=~.*6000, name="read counts", labels=fancy_scientific)) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.ticks.y.right=element_line(colour=color_reads),
+        axis.text.y.right=element_text(colour=color_reads),
+        axis.title.y.right=element_text(colour=color_reads),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black")) +
+  annotate("text", x=11, y=5e2, label="na", size=3)
+print(p_size_rm11)
+cairo_pdf(paste(res_dir, "figure_2C.pdf", sep=""), width = 6.3, height = 1.8, bg="transparent")
+print(p_size_rm11)
+dev.off()
+
+p <- ggplot(plot_df_diff %>% subset(replicate!=11)) +
+  geom_point(aes(x=replicate, y=frac0, col="all"), size=0.75) +
+  geom_point(aes(x=replicate, y=frac0, col="pseudo"), size=0.75, data=plot_df_diff_pseudo %>% subset(replicate!=11)) +
+  scale_x_continuous(name="Library", breaks=c(1, 5, 11, (3:8)*5, 43)) +
+  scale_y_continuous(name="dropout", limits=c(0,1)) +
+  scale_color_manual(name="", values=cb_palette3) +
+  geom_hline(col=cb_palette3[1], yintercept = median(plot_df_diff$frac0), linetype="dashed") +
+  geom_hline(col=cb_palette3[2], yintercept = median(plot_df_diff_pseudo$frac0), linetype="dashed") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p)
+cairo_pdf(paste(res_dir, "frac0_small.pdf", sep=""), width = 1.1, height = 0.8, bg="transparent")
+print(p)
+dev.off()
+
+p_frac0 <- ggplot(plot_df_diff %>% subset(replicate!=11)) +
+  geom_point(aes(x=replicate, y=frac0, col="all"), size=0.75) +
+  geom_point(aes(x=replicate, y=frac0, col="pseudo"), size=0.75, data=plot_df_diff_pseudo %>% subset(replicate!=11)) +
+  scale_x_continuous(name="Library", breaks=c(1, 5, 11, (3:8)*5, 43)) +
+  scale_y_continuous(name="dropout", limits=c(0,1)) +
+  scale_color_manual(name="", values=cb_palette3) +
+  geom_hline(col=cb_palette3[1], yintercept = median(plot_df_diff$frac0), linetype="dashed") +
+  geom_hline(col=cb_palette3[2], yintercept = median(plot_df_diff_pseudo$frac0), linetype="dashed") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_frac0)
+cairo_pdf(paste(res_dir, "frac0.pdf", sep=""), width = 4.4, height = 2.2)
+print(p_frac0)
+dev.off()
+
+save(p_frac0, file=paste0(res_dir, "p_frac0.Rdata"))
+```
+
+```{r}
+cond_data <- strsplit(colnames(read_counts), "_")
+cond <- data.frame(sample=colnames(read_counts),
+                   condition=sapply(cond_data, function(x) x[2]),
+                   exp_id=as.numeric(sub("Lib", "", sapply(cond_data, function(x) x[1]))))
+
+# remove <- which(cond$exp_id %in% c(2,9,11,22))
+logcounts <- edgeR::cpm(read_counts %>% as.matrix(), log=TRUE, prior.count = 1)
+
+pca_raw <- stats::prcomp(t(logcounts))
+cond_data <- strsplit(rownames(pca_raw$x), "_")
+pca_df <- cbind(pca_raw$x %>% as.data.frame(),
+                condition=sapply(cond_data, function(x) x[2]),
+                exp_id=as.numeric(sub("Lib", "", sapply(cond_data, function(x) x[1]))))
+pca_imp <- summary(pca_raw)$importance[2,]
+```
+
+```{r}
+p_pca <- ggplot(pca_df, aes(x=PC1, y=PC2)) +
+  # geom_point(aes(col=condition, label=exp_id)) +
+  geom_text(aes(label=exp_id, col=condition), size=2.5) +
+  scale_color_manual(name="", values=cb_palette3) +
+  scale_x_continuous(name=paste0("PC1 (", round(pca_imp[1]*100), "%)"), limits=c(-200,600)) +
+  scale_y_continuous(name=paste0("PC2 (", round(pca_imp[2]*100), "%)"), breaks=(-5:1)*100, limits=c(-500, 100)) +
+  theme(rect=element_rect(fill="transparent"),
+        aspect.ratio=1,
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_pca)
+cairo_pdf(paste(res_dir, "shigella_pca_raw.pdf", sep=""), width = 2.5, height = 2.5)
+print(p_pca)
+dev.off()
+
+save(p_pca, file=paste0(res_dir, "p_pca.Rdata"))
+```
+
+```{r}
+sample_corr <- round(cor(logcounts), 1)
+cond_rm11 <- cond %>% subset(exp_id!=11) %>% arrange(exp_id, condition)
+sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
+p_corr <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette2[1], "white", cb_palette2[2])) +
+  scale_x_discrete(name="Library", breaks=paste0("Lib", c((1:10)*4, 43), "_INPUT"), labels=c((1:10)*4, 43)) +
+  scale_y_discrete(name="Library", breaks=paste0("Lib", c((1:10)*4, 43), "_INPUT"), labels=c((1:10)*4, 43)) +
+  theme_bw(base_size=10) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_corr)
+cairo_pdf(paste(res_dir, "shigella_corr_mat.pdf", sep=""), width = 2.5, height = 2.5)
+print(p_corr)
+dev.off()
+```
+
+```{r}
+sample_corr <- round(cor(logcounts), 1)
+cond_rm11 <- cond %>% subset(exp_id<4 | exp_id>40) %>% arrange(exp_id, condition)
+sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
+sample_corr <- cbind(sample_corr, Lib4_INPUT=rep(0,12))
+sample_corr <- rbind(sample_corr, Lib4_INPUT=rep(0,13))
+sample_corr <- sample_corr[order(rownames(sample_corr)), order(colnames(sample_corr))]
+p_corr_zoom <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette3[1], "white", cb_palette3[2]))
+
+p_corr_zoom <- p_corr_zoom +
+  scale_x_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,4,41,42,43), "_INPUT"), labels=c(1,2,3, "",41,42,43)) +
+  scale_y_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,4,41,42,43), "_INPUT"), labels=c(1,2,3, "",41,42,43)) +
+  ggtitle("Correlation matrix") +
+  theme_bw(base_size=10) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")), axis.title=element_blank(),
+        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), strip.text = element_blank(), panel.spacing = unit(0.1, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_corr_zoom)
+cairo_pdf(paste(res_dir, "shigella_corr_mat_1-10.pdf", sep=""), width = 1.3, height = 1.5)
+print(p_corr_zoom)
+dev.off()
+
+cond_rm11 <- cond %>% subset(exp_id<3 | exp_id>41) %>% arrange(exp_id, condition)
+sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
+sample_corr <- cbind(sample_corr, Lib4_INPUT=rep(0,12))
+sample_corr <- rbind(sample_corr, Lib4_INPUT=rep(0,13))
+sample_corr <- sample_corr[order(rownames(sample_corr)), order(colnames(sample_corr))]
+p_corr_zoom <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette3[1], "white", cb_palette3[2]))
+
+p_corr_zoom <- p_corr_zoom +
+  scale_x_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
+  scale_y_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
+  # ggtitle("Normalization") +
+  theme_bw(base_size=10) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")), axis.title=element_blank(),
+        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), strip.text = element_blank(), panel.spacing = unit(0.1, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_corr_zoom)
+cairo_pdf(paste(res_dir, "shigella_corr_mat_small.pdf", sep=""), width = 1.1, height = 1, bg="transparent")
+print(p_corr_zoom)
+dev.off()
+
+save(p_corr_zoom, file=paste0(res_dir, "p_corr_zoom.Rdata"))
+```
+
+```{r}
+data_meta <- data_table %>% subset(type!="inter") %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
+read_counts <- data_table %>% subset(type!="inter") %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type", "TI"))
+read_counts[read_counts < 20] <- 0
+data_table <- cbind(data_meta, read_counts)
+data_table <- data_table[-which(rowSums(data_table %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type", "TI")))==0),]
+
+data_table <- data_table[,-grep("Lib11", colnames(data_table))]
+
+sample_labs <- colnames(data_table)[grep("INPUT|OUTPUT", colnames(data_table))]
+sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% as.factor %>% as.numeric)
+# shift experiment index because of Lib11 removal (try without shifting to agree with experimental figures)
+sample_stats$exp_id[which(sample_stats$exp_id>10)] <- sample_stats$exp_id[which(sample_stats$exp_id>10)] - 1
+```
+
+```{r}
+dfit_org <- fread(paste0(res_dir, "dfit_all_org.csv"), quote=F, data.table=F)
+dfit_new <- fread(paste0(res_dir, "dfit_all.csv"), quote=F, data.table=F) %>% mutate(it_g_org=dfit_org$it_g[match(locus_tag, dfit_org$locus_tag)])
+dfit_pseudo_org <- fread(paste0(res_dir, "dfit_pseudo_org.csv"), quote=F, data.table=F)
+dfit_pseudo <- fread(paste0(res_dir, "dfit_pseudo.csv"), quote=F, data.table=F)
+
+counts_org <- fread(paste0(res_dir, "counts_all_org.csv"), quote=F, data.table=F)
+counts_new <- fread(paste0(res_dir, "counts_all.csv"), quote=F, data.table=F)
+
+subset(dfit_new, it_g/it_g_org!=1) %>% head()
+```
+
+```{r}
+lab <- "all"
+create_dfit(data_table, sample_stats, lab, description="", res_dir)
+
+lab <- "pseudo"
+data_table_pseudo <- subset(data_table, type==lab)
+create_dfit(data_table_pseudo, sample_stats, lab, description="", res_dir)
+```
+
+```{r}
+# load count data and export to cmdstan format
+lab <- "pseudo"
+dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
+counts_file <- paste0(res_dir, "counts_", lab, ".csv")
+locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
+dfit_NZ <- export_cmdstan(dfit_file, counts_file, res_dir, lab, norm_fac=rep(0, 42), organism="Shigella")
+```
+
+```{r}
+results_samples <- rbind(
+  cbind(fread(cmd=sprintf('zcat %s | grep -v "#"', paste(data_dir, "Shigella_", lab, "_1.csv.gz", sep="")), quote=F, data.table=F), Chain=1),
+  cbind(fread(cmd=sprintf('zcat %s | grep -v "#"', paste(data_dir, "Shigella_", lab, "_2.csv.gz", sep="")), quote=F, data.table=F), Chain=2)
+) # for data from external cmdstan run
+```
+
+```{r}
+sample_stats <- sample_stats %>% arrange(exp_id)
+norm_fac <- apply(results_samples[, grep("norm_fac\\.", colnames(results_samples))], 2, median)
+sample_stats$norm_fac <- rep(norm_fac, each=2)
+mu_logFC <- results_samples[, c("mu")] %>% median
+a_in <- apply(results_samples[, c("a.1", "a.2")], 2, median)
+b <- results_samples[,"b"] %>% median
+```
+
+```{r}
+# load count data and export to cmdstan format
+lab <- "all"
+dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
+counts_file <- paste0(res_dir, "counts_", lab, ".csv")
+locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
+
+lab <- "all_Bnorm"
+dfit_NZ <- export_cmdstan(dfit_file, counts_file, res_dir, lab, norm_fac=norm_fac, b=b, a_in=a_in, organism="Shigella")
+dfit_NZ$norm_fac <- sample_stats$norm_fac[match(dfit_NZ$sample, sample_stats$sample)]
+
+gene_stats <- dfit_NZ %>% group_by(locus_tag, it_g) %>% summarise(n_gz=length(which(raw_out==0)), n_g=length(raw), logcpm_in=mean(logcpm))
+gene_stats$drop_out <- gene_stats$n_gz/gene_stats$n_g
+
+fwrite(dfit_NZ, paste0(res_dir, "dfit_NZ_norm.csv"), quote=F)
+```
+
+```{r}
+dfit_NZ <- dfit_NZ %>% mutate(alpha_in=log(raw*n_ps+0.01), alpha_out=log(raw_out+0.01))
+ggplot() +
+  geom_density(aes(alpha_in, col="in"), data=dfit_NZ, adjust=3) +
+  geom_density(aes(alpha_out, col="out"), data=dfit_NZ, adjust=3)
+
+mu_in <- dfit_NZ %>% subset(raw*n_ps<20000 & raw*n_ps>1000) %>% mutate(raw_norm=raw*n_ps) %>% pull(raw_norm) %>% mean()
+var_in <- dfit_NZ %>% subset(raw*n_ps<20000 & raw*n_ps>1000) %>% mutate(raw_norm=raw*n_ps) %>% pull(raw_norm) %>% var()
+disp_in <- mu_in^2/(var_in-mu_in)
+
+mu_out <- dfit_NZ %>% subset(raw_out<20000 & raw_out>50) %>% pull(raw_out) %>% mean()
+var_out <- dfit_NZ %>% subset(raw_out<20000 & raw_out>50) %>% pull(raw_out) %>% var()
+disp_out <- mu_out^2/(var_out-mu_out)
+nbinom_df <- data.frame(x=0:20000)
+nbinom_df$count <- dnbinom(nbinom_df$x, size=disp_in, mu=mu_in)*4.7e7
+draw_nbinom <- c(rep(0, 9000), rnbinom(10000, size=disp_out, mu=mu_out))
+
+p_norm1 <- ggplot() +
+  geom_histogram(aes(raw*n_ps, fill="input (NB)"), col="transparent", alpha=0.6, data=dfit_NZ %>% subset(raw*n_ps<20000)) +
+  geom_histogram(aes(raw_out, fill="output (ZINB)"), col="transparent", alpha=0.6, data=dfit_NZ %>% subset(raw_out<20000)) +
+  geom_line(aes(x=x, y=count, col="input (NB)"), data=nbinom_df) +
+  geom_density(aes(x, y=(..count..)*2.5e3, col="output (ZINB)"), adjust=0.7, fill="transparent", data=data.frame(x=draw_nbinom) %>% subset(x<=20000)) +
+  scale_color_manual(name="", values=cb_palette3) +
+  scale_fill_manual(name="", values=cb_palette3) +
+  scale_x_continuous(name="normalized read count", breaks=c(0, 10000, 20000)) +
+  scale_y_continuous(name="count", labels=fancy_scientific) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_norm1)
+cairo_pdf(paste(res_dir, "normalization.pdf", sep=""), width = 3, height = 2.2)
+print(p_norm1)
+dev.off()
+
+save(p_norm1, file=paste0(res_dir, "p_norm1.Rdata"))
+```
+
+```{r}
+p_norm2 <- ggplot() +
+  geom_histogram(aes(raw*n_ps, fill="input"), col="transparent", alpha=0.4, data=dfit_NZ %>% subset(raw*n_ps<20000)) +
+  geom_histogram(aes(raw_out, fill="output"), col="transparent", alpha=0.4, data=dfit_NZ %>% subset(raw_out<20000 & raw_out>0)) +
+  scale_color_manual(name="", values=cb_palette3) +
+  scale_fill_manual(name="", values=cb_palette3) +
+  scale_x_continuous(name="normalized read count", breaks=c(0, 10000, 20000)) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_norm2)
+cairo_pdf(paste(res_dir, "normalization2.pdf", sep=""), width = 3, height = 2.2)
+print(p_norm2)
+dev.off()
+```

@@ -1,0 +1,252 @@
+---
+title: "Shigella_tradis_edgeR"
+author: "Laura Jenniches"
+date: "10/8/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+---
+title: "Shigella RNA-seq pilot experiment, edgeR"
+author: "Laura Jenniches"
+date: "17/4/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r global-options, include=FALSE}
+# set result directory for plots etc.
+res_dir <- "../results/pilot_TraDIS_edgeR/"
+data_dir <- "../data/"
+```
+
+```{r setup, results="hide"}
+## Bioconductor
+library('edgeR')
+
+## CRAN
+library('ggplot2')
+library('gplots') # heatmap.2
+library('RColorBrewer')
+library('pheatmap')
+library('dplyr')
+library('data.table')
+library(extrafont)
+# font_import("y")
+# fonts()
+loadfonts()
+
+theme_set(theme_bw(base_size = 10, base_family="Arial"))
+
+cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
+cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
+cb_palette3 <- c("#424242", "#d36c6c")
+```
+
+```{r}
+meta_data <- fread("../annotations/Shigella_meta_combined.csv", quote="\"", stringsAsFactors=F, data.table=F)
+rownames(meta_data) <- meta_data$locus_tag
+genes_chromosome <- meta_data$locus_tag[which(meta_data$seq == unique(meta_data$seq)[1])]
+genes_plasmid <- meta_data$locus_tag[which(meta_data$seq == unique(meta_data$seq)[2])]
+```
+
+Load read counts of transposon insertion sites
+
+```{r}
+data_table <- fread(paste0(data_dir, "counts_pilot_TraDIS.csv.gz"), quote="\"", stringsAsFactors=F, data.table=F)
+read_counts <- data_table %>% subset(locus_tag!="inter") %>% select(contains("rpt"))
+
+cond_data <- sapply(sub("Min", "Min-37C", colnames(read_counts)), function(x) strsplit(as.character(x), "[-]")[[1]])
+cond <- data.frame(sample=cond_data[1,],
+                   condition=cond_data[2,],
+                   replicate=as.integer(sub("rpt", "", cond_data[4,])),
+                   temp=cond_data[3,],
+                   identifier=colnames(read_counts),
+                   row.names=colnames(read_counts),
+                   stringsAsFactors=F)
+
+N_sa <- nrow(cond)
+
+read_counts <- read_counts %>% aggregate(by=list(data_table %>% subset(locus_tag!="inter") %>% pull(locus_tag)), sum)
+rownames(read_counts) <- data_table %>% subset(locus_tag!="inter") %>% pull(locus_tag) %>% unique
+```
+
+# Number of unique insertion sites
+The number of unique insertion sites should roughly correspond to the number of distinct mutants present in the sample. Therefore, we can use them to estimate whether large bottleneck effects are present in certain samples. Since their numbers do not differ by order of magnitude, bottleneck effects should not be an issue in this experimental setup.
+
+```{r, fig.width=12,}
+insertion_sites_in <- data_table
+insertion_sites_chrom <- apply(insertion_sites_in[which(insertion_sites_in$seq=="CP037923.1"), 1:18], 2, function(x) length(which(x!=0)))
+insertion_sites_plasmid <- apply(insertion_sites_in[which(insertion_sites_in$seq=="CP037924.1"), 1:18], 2, function(x) length(which(x!=0)))
+
+plot_is <- tidyr::gather(data.frame(sample=names(insertion_sites_chrom), chrom=insertion_sites_chrom, plasmid=insertion_sites_plasmid), "location", "unique.IS", 2:3)
+
+g <- ggplot(plot_is, aes(sample)) +
+  geom_bar(aes(fill=location, y=unique.IS), stat="identity", width = 0.7) + 
+  scale_fill_manual(values=cb_palette[c(1,3)]) +
+  theme(rect=element_rect(fill="transparent"),
+      axis.line=element_line(linewidth=unit(0.1, "pt")),
+      legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+      legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+      strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+      panel.grid=element_blank(), axis.text=element_text(color = "black"))
+plot(g)
+```
+
+```{r}
+# Initiate edgeR variables
+group <- factor(paste(cond$condition, cond$temp, sep="_"))
+dgeAll <- DGEList(read_counts, group=group, genes=rownames(read_counts))
+keep <- rowSums(edgeR::cpm(dgeAll$counts[,!grepl("RNA", colnames(dgeAll$counts))]) > 10) >= 3
+dgeAll <- dgeAll[keep, , keep.lib.sizes=FALSE]
+
+dgeAll <- calcNormFactors(dgeAll)
+normCounts <- edgeR::cpm(dgeAll)
+pseudoNormCounts <- log2(normCounts + 1)
+
+design <- model.matrix(~0+group)
+colnames(design) <- levels(group)
+```
+
+# Normalization
+The data was normalized using edgeR trimmed mean of M-values (TMM).
+
+## Boxplot before normalization
+```{r}
+pseudoCounts <- log2(dgeAll$counts+1)
+boxplot(pseudoCounts, col="gray", las=3)
+```
+
+## Boxplot after normalization
+```{r}
+boxplot(pseudoNormCounts, col="gray", las=3)
+```
+
+# Multi-dimensional scaling (MDS) plots
+The replicates cluster nicely in the MDS plot. Dimension 1 separates the samples into minimal enrichment, ON cultures and enrichment, while dimension 2 provides a temperature differentiation. The subculture clusters close to the 30C ON culture, which is not unexpected because it was obtained directly from the 30C ON culture.
+
+```{r, fig.show="hide"}
+opts_chunk$set(fig.show="hide")
+mds_data <- plotMDS(pseudoNormCounts, show=F)
+mds_data <- data.frame(sample=dgeAll$samples %>% rownames(), group=group, dim1=mds_data$x, dim2=mds_data$y)
+```
+```{r, fig.show="asis"}
+g <- ggplot(mds_data, aes(x=dim1, y=dim2)) +
+#  geom_point(aes(col=group)) +
+  geom_text(aes(label=sample, col=group)) +
+  scale_color_discrete(guide=F) +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=12),
+        legend.text=element_text(size=12),
+        legend.title=element_blank())
+plot(g)
+```
+
+# Clustering of samples
+We have already seen that the samples cluster nicely in the MDS plot. We can also cluster the samples by sample distance which was calculated using normalized log2 counts. Similar samples have small distances (i.e. simililar normalized read counts). The results are presented in form of a heatmap. Also here, replicates nicely cluster together. The enriched samples cluster separately from the rest of the samples and the samples which were enriched at 37C have the largest distance from the other samples.
+
+```{r, fig.show="asis"}
+sampleDists <- dist(t(pseudoNormCounts))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- colnames(pseudoCounts)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+```
+
+# MA plots and differential expression analysis
+The following contrasts will be used (the correspond to the names of the directories with the results from the DE and pathway analysis):
+
+* Enr_Sub_30=Enr_30 - Sub_37
+* Enr_Sub_37=Enr_37 - Sub_37
+* Enr_37_30=Enr_37 - Enr_30
+
+The MA plots show the genes where read counts differ significantly at an FDR of 0.01. Features with fewer read count are advantageous for the growth at a given condition, while those with higher counts are disadvantageous at a given condition, i.e. mutants which lag those features grow/survive better.
+
+```{r, fig.show="asis"}
+dgeAll <- estimateDisp(dgeAll, design, robust=TRUE)
+# plotBCV(dgeAll)
+
+fit <- glmQLFit(dgeAll,design,robust=T)
+# plotQLDisp(fit)
+
+con <- makeContrasts(Enr_Sub_30=Enr_30C - Sub_37C,
+                     Enr_Sub_37=Enr_37C - Sub_37C,
+                     Enr_37_30=Enr_37C - Enr_30C,
+                     levels=design)
+contrast_info <- c("Enrichment at 30C vs subculture at 37C",
+                   "Enrichment at 37C vs subculture at 37C",
+                   "Enrichment at 37C vs enrichment at 30C")
+names(contrast_info) <- colnames(con)
+```
+
+## Enrichment compared to subculture
+As argued above, the most interesting comparison is enrichment at various temperatures vs. subculture. Since the actual input for the enrichment is the subculture which has quite a number of mutants with a reduced number of counts as compared to the minimal enrichment (Min), we should not use the Min samples for this comparison (see corresponding MA plot).
+
+This comparison provides us with the information of how much the enrichment step influences the fitness of the mutants. We can see that compared to the enrichment 37C, there are considerably fewer mutants with a significantly reduced amount after the enrichment at 30C. Notably, virF is no longer one of the top tags, which is important since it is a transcriptional activator with an important role in virulence whose impact on fitness during the infection we would like to study. Since both enriched samples (enr_30 and enr_37) are obtained from the same ON and subculture, it is also legitimate to directly compare them.
+
+The temparature of the ON culture does not seem to have a big impact on population structure (ON 30C vs. ON 37C).
+
+```{r, fig.show="asis"}
+for (a_con in colnames(con)) {
+  qlf <- glmQLFTest(fit, contrast=con[,a_con])
+  # tr <- glmTreat(fit, contrast=con[,a_con], lfc=1)
+  tt <- topTags(qlf, Inf) %>% as.data.frame()
+  tt_mod <- cbind(locus_tag=rownames(tt),
+                  gene_name=meta_data$com_id[match(rownames(tt), meta_data$locus_tag)],
+                  description=meta_data$description[match(rownames(tt), meta_data$locus_tag)],
+                  type=meta_data$type[match(rownames(tt), meta_data$locus_tag)],
+                  tt[,c(2:4,6:7)],
+                  m_log10FDR=-log10(tt$FDR))
+  write.table(tt_mod, paste0(res_dir, "/tt_", a_con, ".csv"), row.names=F, quote=F, sep="\t")
+    # gene list chromosome
+  write.table(subset(tt_mod, locus_tag %in% genes_chromosome), paste0(res_dir, "/tt_chromosome_", a_con, ".csv"), row.names=F, quote=F, sep="\t")
+  # gene list virulence plasmid
+  write.table(subset(tt_mod, locus_tag %in% genes_plasmid), paste0(res_dir, "/tt_plasmid_", a_con, ".csv"), row.names=F, quote=F, sep="\t")
+  
+  pos.sig <- which(tt_mod$FDR < 0.01 & tt_mod$logFC>1)
+  neg.sig <- which(tt_mod$FDR < 0.01 & tt_mod$logFC < -1) 
+  
+  p_MA <- tt_mod %>% ggplot(aes(logCPM, logFC)) +
+    geom_point(col=cb_palette2[3], alpha=0.4) +
+    geom_point(aes(col="adv. FDR\u22640.01"), shape=1, size=1.5, data=subset(tt_mod, FDR<=0.01 & logFC < -1)) +
+    geom_point(aes(col="detr. FDR\u22640.01"), shape=1, size=1.5, data=subset(tt_mod, FDR<=0.01 & logFC>1)) +
+    scale_color_manual(name="", values=cb_palette2[c(1,2)], breaks=c("adv. FDR\u22640.01", "detr. FDR\u22640.01")) +
+    theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+  print(p_MA)
+  cairo_pdf(paste0(res_dir, "/MA_", a_con, ".pdf"), width = 3, height = 3)
+  print(p_MA)
+  dev.off()
+  
+  p_max <- tt_mod %>% subset(FDR<=0.01 & abs(logFC)>1) %>% pull(PValue) %>% max()
+  p_v <- tt_mod %>% ggplot(aes(logFC, -log10(PValue))) +
+    geom_point(col=cb_palette2[3], alpha=0.4) +
+    geom_point(aes(col="adv. FDR\u22640.01"), shape=1, size=1.5, data=subset(tt_mod, FDR<=0.01 & logFC < -1)) +
+    geom_point(aes(col="detr. FDR\u22640.01"), shape=1, size=1.5, data=subset(tt_mod, FDR<=0.01 & logFC>1)) +
+    geom_hline(yintercept=-log10(p_max), linetype="dashed") +
+    geom_vline(xintercept=-1, col=cb_palette2[1], linetype="dashed") +
+    geom_vline(xintercept=1, col=cb_palette2[2], linetype="dashed") +
+    scale_color_manual(name="", values=cb_palette2[c(1,2)], breaks=c("adv. FDR\u22640.01", "detr. FDR\u22640.01")) +
+    theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+  print(p_v)
+  cairo_pdf(paste0(res_dir, "/volcano_", a_con, ".pdf"), width = 2, height = 2.1)
+  print(p_v)
+  dev.off()
+}
+```

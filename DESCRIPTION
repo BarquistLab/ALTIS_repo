@@ -1,0 +1,33 @@
+Package: ALTIS
+Title: R Package for the analysis of large-scale TraDIS infection screens with Stan
+Version: 0.0
+Authors@R: person("Laura", "Jenniches", email = "laura.jenniches@helmholtz-hiri.de",
+                  role = c("aut", "cre"))
+Description: Analyse NGS sequencing time-series data with
+    multivariate models using the statistical modeling language Stan. Stan models are in the
+    directory stan_models, a working example
+    can be found in the directory examples.
+Depends: R (>= 4.3.1)
+Encoding: UTF-8
+License: GPL-3
+LazyData: true
+Imports:
+    data.table,
+    tidyverse,
+    ggplot2,
+    viridis,
+    bayesplot,
+    rstan,
+    stringr,
+    Cairo,
+    wCorr,
+    MASS
+Suggests:
+    cowplot,
+    cmdstanr,
+    posterior,
+    loo,
+    ggpubr,
+    ggrastr
+RoxygenNote: 7.2.3
+URL: http://github.com/BarquistLab/Shigella_TraDIS_repo

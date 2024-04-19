@@ -1,0 +1,407 @@
+---
+title: "Shigella pilot experiments"
+author: "Laura Jenniches"
+date: "17/4/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r global-options, include=FALSE}
+# set result directory for plots etc.
+res_dir <- "../results/pilot_experiments/"
+data_dir <- "../data/"
+```
+
+```{r setup, results="hide"}
+## Bioconductor
+library('edgeR')
+
+## CRAN
+library(ggplot2)
+library(dplyr)
+library(devEMF)
+library(viridis)
+library(data.table)
+library(extrafont)
+# font_import("y")
+# fonts()
+loadfonts()
+
+theme_set(theme_bw(base_size = 10, base_family="Arial"))
+
+source("../R/utils.R")
+source("../R/normalization.R")
+
+cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
+cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
+cb_palette3 <- c("#424242", "#d36c6c")
+```
+
+```{r}
+# load gene meta data
+meta_data <- fread("../annotations/Shigella_meta_combined.csv", quote="\"", stringsAsFactors=F, data.table=F)
+row.names(meta_data) <- meta_data$locus_tag
+meta_data$it_g <- as.numeric(factor(meta_data$locus_tag))
+meta_data$length <- meta_data$end - meta_data$start + 1
+seq_list <- unique(meta_data$seq)
+n_seq <- length(seq_list)
+```
+
+load count data for L10/L30 sub-libraries with 10,000 and 30,000 transposon insertion sites (TIS), respectively
+
+```{r}
+data_table <- fread(paste(data_dir, "counts_TraDIS_L10_L30.csv.gz", sep=""), quote="\"", stringsAsFactors=F, data.table=F)
+read_counts <- data_table[, grep("rpt", colnames(data_table))]
+
+cond_data <- sapply(colnames(read_counts), function(x) strsplit(as.character(x), "[-]")[[1]])
+cond <- data.frame(lib.type=sub("L", "", cond_data[2,]),
+                   sample=cond_data[1,],
+                   condition=cond_data[3,],
+                   replicate=as.integer(sub("rpt", "", cond_data[4,])),
+                   strain="M90T",
+                   identifier=colnames(read_counts),
+                   row.names=colnames(read_counts),
+                   stringsAsFactors=F)
+
+N_sa <- nrow(cond)
+```
+
+```{r}
+data_table$it_g <- meta_data$it_g[match(data_table$locus_tag, meta_data$locus_tag)]
+rownames(read_counts) <- paste(data_table$seq, data_table$pos, sep="_")
+pseudo_genes <- subset(read_counts, data_table$type=="pseudo")
+
+# drop insert sites which have 0 counts accross all libraries
+keep <- which(rowSums(read_counts) > 0)
+read_counts <- read_counts[keep,]
+data_table <- data_table[keep,]
+
+rownames(read_counts) <- data_table$TI
+pseudo_genes <- subset(read_counts, data_table$type=="pseudo")
+```
+
+normalization with pseudo genes
+
+```{r}
+lib_sizes <- colSums(read_counts)
+norm_facs <- get_norm_facs_nonzero(read_counts, pseudo_genes, count_min=1, sample_min=3)
+write.table(data.frame(nf=norm_facs), paste(res_dir, "norm_facs_L10_L30.csv", sep=""), row.names=T, quote=F)
+```
+
+Estimate number of samples required for infection assay
+
+```{r}
+insertion_sites_in <- fread(paste(data_dir, "counts_pilot_TraDIS.csv.gz", sep=""), data.table = F, stringsAsFactors = F) %>% dplyr::select(matches("Min|locus"))
+dfit_min <- data.frame(locus_tag=insertion_sites_in$locus_tag, counts_sum=rowSums(insertion_sites_in[1:3])) %>% subset(counts_sum>1)
+estimate_N_samples <- data.frame(N_samples=(5:50)*2)
+estimate_N_samples$n_genes_min3 <- sapply(estimate_N_samples$N_samples, function(x) {
+  data.frame(sel=sample(dfit_min$locus_tag, x*3000, replace=T, prob=dfit_min$counts_sum)) %>% subset(sel!="inter") %>%
+    group_by(sel) %>% summarise(n_TIS=n()) %>% subset(n_TIS>2) %>% nrow()
+})
+estimate_N_samples$n_genes_min1 <- sapply(estimate_N_samples$N_samples, function(x) {
+  data.frame(sel=sample(dfit_min$locus_tag, x*1000, replace=T, prob=dfit_min$counts_sum)) %>% subset(sel!="inter") %>%
+    group_by(sel) %>% summarise(n_TIS=n()) %>% subset(n_TIS>2) %>% nrow()
+})
+estimate_N_samples$n_genes_min2 <- sapply(estimate_N_samples$N_samples, function(x) {
+  data.frame(sel=sample(dfit_min$locus_tag, x*2000, replace=T, prob=dfit_min$counts_sum)) %>% subset(sel!="inter") %>%
+    group_by(sel) %>% summarise(n_TIS=n()) %>% subset(n_TIS>2) %>% nrow()
+})
+
+p_N_samples <- estimate_N_samples %>% ggplot(aes(N_samples)) +
+  geom_point(aes(y=n_genes_min1, col="1 k")) +
+  geom_point(aes(y=n_genes_min2, col="2 k")) +
+  geom_point(aes(y=n_genes_min3, col="3 k")) +
+  scale_x_continuous(name="no. samples", limits=c(0,100)) +
+  scale_y_continuous(name="no. genes with min. 3 TIS") +
+  scale_color_manual(name="mutants per lib.", values=cb_palette) +
+  geom_vline(xintercept=40, linetype="dashed") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.25,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_N_samples)
+cairo_pdf(paste(res_dir, "N_samples_min3_TIS.pdf", sep=""), width = 3, height = 2.2, bg="transparent")
+print(p_N_samples)
+dev.off()
+```
+
+```{r, eval=F}
+df_40samples_list <- lapply(1:100, function(i) {
+  run_df <- data.frame(sel=sample(dfit_min$locus_tag, 40*3000, replace=T, prob=dfit_min$counts_sum)) %>% subset(sel!="inter") %>%
+    group_by(sel) %>% summarise(n_TIS=n())
+  run_df$n_TIS[which(run_df$n_TIS>=20)] <- 20
+  n_noTIS <- meta_data %>% subset(!(locus_tag %in% run_df$sel)) %>% nrow
+  rbind(run_df %>% group_by(n_TIS) %>% summarise(count=n()), data.frame(n_TIS=0, count=n_noTIS))})
+
+df_40samples <- do.call(rbind, df_40samples_list) %>% group_by(n_TIS) %>% summarise(value=mean(count))
+df_40samples$value_sum <- sapply(1:nrow(df_40samples), function(i) sum(df_40samples$value[1:i]) - 0.5*df_40samples$value[i])
+df_40samples$lab <- df_40samples$n_TIS
+df_40samples$lab[which(df_40samples$n_TIS==20)] <- 
+  paste0("≥20",
+         ":\n",
+         round(df_40samples$value[which(df_40samples$n_TIS==20)]),
+         " genes")
+df_40samples$x <- 1.55
+df_40samples$x[which(df_40samples$n_TIS %in% c(20))] <- 1
+fwrite(df_40samples, paste0(res_dir, "sim40samples_run2.csv"), quote=T)
+```
+
+```{r}
+df_40samples <- fread(paste0(res_dir, "sim40samples.csv"), data.table=F, quote="\"")
+p_pi <- df_40samples %>% ggplot() +
+  geom_bar(aes(x=1, y=value, fill=n_TIS), col="black", stat="identity", alpha=1) +
+  geom_text(aes(x=x, y=value_sum, label=lab), size=2.25) +
+  geom_text(aes(x=1, y=df_40samples$value_sum[which(df_40samples$n_TIS==0)],
+                label=paste0(round(100*df_40samples$value[which(df_40samples$n_TIS==0)]/nrow(meta_data))," %")), size=2.25) +
+  coord_polar("y") +
+  scale_fill_gradientn(name="#TIS", colours=cb_palette[1:4]) +
+  theme_minimal() +
+  theme(
+    rect=element_rect(fill="transparent"),
+    legend.position = 'none',
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    plot.title=element_text(face="bold"),
+    panel.grid = element_blank(),
+    plot.margin = unit(rep(-0.5,4), "cm")
+  )
+print(p_pi)
+cairo_pdf(paste(res_dir, "n_TIS_40_samples.pdf", sep=""), width = 2.2, height = 2.2, bg="transparent")
+print(p_pi)
+dev.off()
+```
+
+create long data frame from L10/L30 libraries
+
+```{r}
+dfit <- data.frame(gene=character(), it_g=integer(), type=character(), k=integer(), seq=character(), pos=integer(), sample=character(), raw=numeric(), stringsAsFactors=F)
+dfit <- rbind(dfit, as.data.frame(reshape::melt(cbind(read_counts, data_table[(N_sa+1):(ncol(data_table))]), id=c("locus_tag", "it_g", "type", "k", "seq", "pos"))))
+colnames(dfit) <- c("gene", "it_g","type","k", "seq", "pos", "sample", "raw")
+dfit$lib.type <- cond$lib.type[match(dfit$sample, cond$identifier)]
+dfit$condition <- cond$condition[match(dfit$sample, cond$identifier)]
+dfit$replicate <- cond$replicate[match(dfit$sample, cond$identifier)]
+dfit$TI <- paste(dfit$seq, dfit$pos, sep="_")
+dfit$com_id <- meta_data$com_id[match(dfit$gene, meta_data$locus_tag)]
+dfit$nf <- norm_facs[match(dfit$sample, names(norm_facs))]
+dfit$N <- lib_sizes[match(dfit$sample, names(lib_sizes))]
+dfit$cpm <- (dfit$raw+0.5)/(dfit$nf*dfit$N+1)*1e+06
+dfit$logcpm <- log((dfit$raw+0.5)/(dfit$nf*dfit$N+1)*1e+06)
+dfit$it_sa <- as.numeric(dfit$sample)
+dfit_pseudo <- subset(dfit, type=="pseudo")
+```
+
+```{r}
+dfit_comp <- subset(dfit, grepl("Min", sample)) %>% subset(!duplicated(paste0(TI,lib.type)))
+dfit_comp <- rbind(cbind(dfit_comp, rep=1), cbind(dfit_comp, rep=2), cbind(dfit_comp, rep=3)) %>% arrange(lib.type)
+dfit_comp$replicate <- dfit_comp$rep
+dfit_comp$sample <- paste(dfit_comp$lib.type, dfit_comp$condition, dfit_comp$replicate, sep="_")
+dfit_out <- subset(dfit, condition=="Out")
+dfit_out$sample <- paste(dfit_out$lib.type, dfit_out$condition, dfit_out$replicate, sep="_")
+dfit_comp$raw_out <- dfit_out$raw[match(paste(dfit_comp$TI, dfit_comp$lib.type, dfit_comp$replicate, sep="_"), paste(dfit_out$TI, dfit_out$lib.type, dfit_out$replicate, sep="_"))]
+dfit_comp <- subset(dfit_comp, raw>9)
+dfit_stats <-  dfit_comp %>% group_by(sample, replicate) %>% summarize(nTI_in=length(raw), nTI_out=length(which(raw_out>1)))
+dfit_stats_pseudo <- dfit_comp %>% subset(type=="pseudo") %>% group_by(sample, replicate) %>% summarize(nTI_in=length(raw), nTI_out=length(which(raw_out>1)))
+```
+
+```{r}
+dfit_NZ_sum <- dfit %>% subset(raw>=10) %>% group_by(lib.type, replicate, condition) %>% summarise(uTI=length(TI))
+dfit_NZ_sum$lib.type <- paste("Lib.", dfit_NZ_sum$lib.type, "k")
+dfit_NZ_sum$id <- paste0(dfit_NZ_sum$condition, "_R", dfit_NZ_sum$replicate)
+dfit_NZ_sum$id <- factor(dfit_NZ_sum$id, levels=dfit_NZ_sum$id %>% unique())
+x_lab <- dfit_NZ_sum$replicate[match(dfit_NZ_sum$id %>% unique, dfit_NZ_sum$id)]
+dfit_NZ_sum$condition <- factor(dfit_NZ_sum$condition, levels=c("Min", "Inp", "Out"))
+
+p_size_min <- ggplot(dfit_NZ_sum) +
+  geom_col(aes(x=replicate, y=uTI, fill=condition), stat="identity", position=position_dodge(width=1, preserve = "single"), alpha=1, size=0) +
+  facet_wrap(~lib.type) +
+  scale_fill_manual(name="", values=cb_palette[c(2,1,3)]) +
+  scale_y_continuous(name="# unique IS", labels=fancy_scientific) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_size_min)
+cairo_pdf(paste(res_dir, "pilot_exp_unique_IS_SI.pdf", sep=""), width = 3, height = 2.2, bg="transparent")
+print(p_size_min)
+dev.off()
+
+p_size <- ggplot(dfit_NZ_sum %>% subset(condition!="Min")) +
+  geom_col(aes(x=replicate, y=uTI, fill=condition), stat="identity", position=position_dodge(width=1, preserve = "single"), alpha=1, size=0) +
+  facet_wrap(~lib.type) +
+  scale_fill_manual(name="", values=cb_palette[c(1,3)]) +
+  scale_y_continuous(name="nr. unique IS", labels=fancy_scientific) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_size)
+cairo_pdf(paste(res_dir, "pilot_exp_unique_IS.pdf", sep=""), width = 3, height = 2.2, bg="transparent")
+print(p_size)
+dev.off()
+
+cairo_pdf(paste(res_dir, "pilot_S1.pdf", sep=""), width = 6.9, height = 2.2, bg="transparent")
+cowplot::plot_grid(p_size_min, p_N_samples, p_pi, rel_widths = c(0.35, 0.35, 0.25), scale=c(0.95, 0.95, 0.73), ncol=3)
+dev.off()
+```
+
+```{r}
+counts_in <- read_counts[, grep("L10-Min", colnames(read_counts))]
+counts_in <- t(t(counts_in)/colSums(counts_in))*1e6
+rownames(counts_in) <- rownames(read_counts)
+counts_in <- counts_in[rowSums(counts_in)>0, ]
+median_counts_in <- rowMedians(counts_in)
+
+bottleneck <- (1:60)*100
+bottleneck_df <-
+  data.frame(bottleneck,
+             nTI_out_10=sapply(bottleneck,
+                               function(size) sample(rownames(counts_in), size, replace=T, prob=median_counts_in) %>% unique %>% length)
+)
+
+counts_in <- read_counts[, grep("L30-Min", colnames(read_counts))]
+counts_in <- t(t(counts_in)/colSums(counts_in))*1e6
+rownames(counts_in) <- rownames(read_counts)
+counts_in <- counts_in[rowSums(counts_in)>0, ]
+median_counts_in <- rowMedians(counts_in)
+
+bottleneck_df <- 
+  cbind(bottleneck_df,
+        nTI_out_30=sapply(bottleneck,
+                          function(size) sample(rownames(counts_in), size, replace=T, prob=median_counts_in) %>% unique %>% length)
+)
+
+p_bottle <- ggplot(bottleneck_df) +
+  geom_tile(aes(x, y, width=1500), fill="gray", data=data.frame(x=c(2000), y=c(0, Inf))) +
+  geom_line(aes(x=bottleneck, y=nTI_out_10, col="10k")) +
+  geom_line(aes(x=bottleneck, y=nTI_out_30, col="30k")) +
+  geom_hline(aes(yintercept=nTI_out, col="10k", linetype=replicate %>% as.character()), data=dfit_stats %>% subset(grepl("10", sample))) +
+  geom_hline(aes(yintercept=nTI_out, col="30k", linetype=replicate %>% as.character()), data=dfit_stats %>% subset(grepl("30", sample))) +
+  scale_color_manual(name="", values=cb_palette[c(1,4)]) +
+  scale_linetype_manual(name="Rep", values=c(2,2,2), guide=F) +
+  scale_y_continuous(name="nr. unique output IS") +
+  scale_x_continuous(name="bottleneck size") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_bottle)
+cairo_pdf(paste(res_dir, "bottleneck.pdf", sep=""), width = 3, height = 2.2, bg="transparent")
+print(p_bottle)
+dev.off()
+```
+
+```{r, fig.show="asis"}
+tt_37vs30 <- read.table("../results/pilot_RNAseq_edgeR/tt_M90T_37vs30C.csv", header=T, sep="\t", quote="")
+tt_enr37vs30 <- read.table("../results/pilot_TraDIS_edgeR/tt_Enr_37_30.csv", header=T, sep="\t", quote="")
+tt_enr_30 <- read.table("../results/pilot_TraDIS_edgeR/tt_Enr_Sub_30.csv", header=T, sep="\t", quote="")
+tt_enr_37 <- read.table("../results/pilot_TraDIS_edgeR/tt_Enr_Sub_37.csv", header=T, sep="\t", quote="")
+cor_virF <- data.frame(locus_tag=tt_37vs30$locus_tag,
+                       logFC_M90T_37vs30=tt_37vs30$logFC,
+                       FDR_M90T_37vs30=tt_37vs30$FDR,
+                       logFC_enr37vs30=tt_enr37vs30$logFC[match(tt_37vs30$locus_tag, tt_enr37vs30$locus_tag)], 
+                       FDR_enr37vs30=tt_enr37vs30$FDR[match(tt_37vs30$locus_tag, tt_enr37vs30$locus_tag)], 
+                       gene_name=meta_data$com_id[match(tt_37vs30$locus_tag, meta_data$locus_tag)],
+                       seq=meta_data$seq[match(tt_37vs30$locus_tag, meta_data$locus_tag)],
+                       description=tt_37vs30$description, type=tt_37vs30$type)
+write.table(cor_virF, paste0(res_dir, "cor_37vs30_enr37vs30.csv"), row.names=F, quote=F, sep="\t")
+
+cor_virF <- subset(cor_virF, seq=="CP037924.1" | gene_name %in% c("virF", "cpxR", "EKN05_024540"))
+cor_virF$reg <- "neutral"
+cor_virF$reg[which(cor_virF$FDR_enr37vs30<=0.01 & cor_virF$logFC_enr37vs30>1)] <- "Detr"
+cor_virF$reg[which(cor_virF$FDR_enr37vs30<=0.01 & cor_virF$logFC_enr37vs30< -1)] <- "Adv"
+
+p_corr <- ggplot(cor_virF %>% subset((FDR_M90T_37vs30<=0.01 & type=="CDS") | gene_name %in% c("virF", "cpxR", "EKN05_024540")), aes(x=logFC_M90T_37vs30, y=logFC_enr37vs30)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_vline(xintercept=0, linetype="dashed") +
+  geom_point(aes(col=reg, alpha=reg)) +
+  ggrepel::geom_text_repel(aes(label=ifelse(FDR_enr37vs30<=0.05, gene_name, "")), col="black", size=2,
+                           subset(cor_virF, gene_name %in% c("virF", "cpxR", "EKN05_024540", "ipaA", "ipaD", "fis", "EKN05_024560", "virB"))) +
+  scale_color_manual(name="", values=c(cb_palette2,"gray")) +
+  scale_alpha_manual(name="", values=c(1, 1, 0.5)) +
+  scale_x_continuous(name="RNA-seq M90T, 37\u00B0C vs. 30\u00B0C", limits=c(-2,8)) +
+  scale_y_continuous(name="TraDIS enr. 37\u00B0C vs. enr. 30\u00B0C", limits=c(-3, 4)) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_rect(fill=NA, size=0.5), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_corr)
+cairo_pdf(paste(res_dir, "TraDIS_RNAseq.pdf", sep=""), width = 3, height = 2.2, bg="transparent")
+print(p_corr)
+dev.off()
+```
+
+# Venn Diagrams
+
+```{r}
+tt_virF_37 <- read.table("../results/pilot_RNAseq_edgeR/tt_M90TvsFd_37C.csv", header=T, sep="\t", quote="")
+
+tt_virF_30 <- read.table("../results/pilot_RNAseq_edgeR/tt_M90TvsFd_30C.csv", header=T, sep="\t", quote="")
+virF37_genes <- tt_virF_37 %>% subset(FDR<=0.01 & abs(logFC)>1 & type=="CDS") %>% pull(locus_tag)
+# remove the gene which is in none of the other categories for plotting
+virF30_genes <- tt_virF_30 %>% subset(FDR<=0.01 & abs(logFC)>1 & type=="CDS") %>% pull(locus_tag)
+temp_genes <- tt_37vs30 %>% subset(FDR<=0.01 & abs(logFC)>1 & type=="CDS") %>% pull(locus_tag)
+
+temp <- VennDiagram::venn.diagram(x = list(virF37_genes, temp_genes, virF30_genes),
+                          category.names = c(paste0("virF regulated genes\n(M90T vs ΔvirF\n 37\u00B0C) ", length(virF37_genes)),
+                                             paste0("Temperature regulated genes\n(M90T\n 37\u00B0C vs. 30\u00B0C) ", length(temp_genes)),
+                                             paste0("M90T vs ΔvirF\n 30\u00B0C ", length(virF30_genes))),
+                          filename = NULL,
+                          fill = cb_palette[c(1,3,4)],
+                          fontfamily = "sans",
+                          cat.fontfamily = "sans",
+                          col="transparent",
+                          # imagetype = "svg",
+                          margin=0.1,
+                          cex=0.7,
+                          cat.cex=0.7,
+                          output=F)
+grid::grid.draw(temp)
+
+cairo_pdf(paste0(res_dir, 'virF_temp.pdf'), bg="transparent")
+grid::grid.draw(temp)
+dev.off()
+```
+
+```{r}
+p_bar <- rbind(data.frame(gene=length(tt_enr_37 %>% subset(FDR<=0.01 & logFC< -1 & type=="CDS") %>% pull(locus_tag)), type="Adv", tmp="37"),
+      data.frame(gene=length(tt_enr_37 %>% subset(FDR<=0.01 & logFC>1 & type=="CDS") %>% pull(locus_tag)), type="Detr", tmp="37"),
+      data.frame(gene=length(tt_enr_30 %>% subset(FDR<=0.01 & logFC< -1 & type=="CDS") %>% pull(locus_tag)), type="Adv", tmp="30"),
+      data.frame(gene=length(tt_enr_30 %>% subset(FDR<=0.01 & logFC>1 & type=="CDS") %>% pull(locus_tag)), type="Detr", tmp="30")) %>%
+  ggplot(aes(x=tmp, y=gene, fill=type)) +
+  geom_col(stat="identity", position=position_dodge(width=1, preserve = "single"), alpha=1, size=0) +
+  # facet_wrap(~tmp, strip.position="bottom") +
+  scale_fill_manual(name="", values=cb_palette2) +
+  scale_x_discrete(name="temp [°C]") +
+  scale_y_continuous(name="nr. mutants") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_bar)
+cairo_pdf(paste(res_dir, "Enr_37vs30.pdf", sep=""), width = 1.8, height = 2.2, bg="transparent")
+print(p_bar)
+dev.off()
+```
+
+```{r}
+p_pilot <- cowplot::plot_grid(
+  cowplot::plot_grid(p_size, p_bottle, p_bar, NULL, scale=c(0.9, 0.9, 0.9, 0.9), rel_widths=c(0.44, 0.37, 0.21, 0.022), ncol=4, labels=c("D", "E", "F",""), label_size=14, label_fontface="plain"),
+  cowplot::plot_grid(NULL, temp, NULL, p_corr, scale=c(0.95, 0.9), rel_widths=c(0.05, 0.36, 0.05, 0.54), ncol=4), ncol=1, rel_heights=c(0.45, 0.55), labels=c("", "G", "", "H"), label_size=14, label_fontface="plain")
+print(p_pilot)
+cairo_pdf(paste(res_dir, "pilot_1.pdf", sep=""), width = 6.9, height = 4.2, bg="transparent")
+print(p_pilot)
+dev.off()
+```
