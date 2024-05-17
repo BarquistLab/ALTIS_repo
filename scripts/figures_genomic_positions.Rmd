@@ -83,6 +83,9 @@ pilot_TIS_counts <- pilot_TIS_in %>% dplyr::select(-c("seq", "pos", "locus_tag",
 
 Figure S1B
 
+- Pilot study, determine optimal enrichment conditions.
+- Location of transposon insertion sites (TIS) on chromosome and plasmid
+
 ```{r}
 plot_df <- pilot_TIS_in %>% subset(seq=="CP037923.1") %>% mutate(bin=ceiling(pos/1000)*1000)
 plot_df$tot_reads <- rowSums(pilot_TIS_counts[pilot_TIS_in$seq=="CP037923.1", grep("Min", colnames(pilot_TIS_counts))])
@@ -181,6 +184,9 @@ dev.off()
 ```
 
 Figure 2B
+
+- TraDIS screen
+- Location of transposon insertion sites (TIS) on chromosome and plasmid
 
 ```{r}
 plot_df <- data_table %>% subset(seq=="CP037923") %>% mutate(bin=ceiling(pos/1000)*1000)

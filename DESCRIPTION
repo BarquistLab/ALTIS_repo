@@ -3,10 +3,10 @@ Title: R Package for the analysis of large-scale TraDIS infection screens with S
 Version: 0.0
 Authors@R: person("Laura", "Jenniches", email = "laura.jenniches@helmholtz-hiri.de",
                   role = c("aut", "cre"))
-Description: Analyse NGS sequencing time-series data with
+Description: Analyse TraDIS data with
     multivariate models using the statistical modeling language Stan. Stan models are in the
-    directory stan_models, a working example
-    can be found in the directory examples.
+    directory stan_models, scripts to reproduce the analysis of a Shigella TraDIS infection screens
+    are in the directory scripts.
 Depends: R (>= 4.3.1)
 Encoding: UTF-8
 License: GPL-3

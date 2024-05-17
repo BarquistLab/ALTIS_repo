@@ -11,9 +11,7 @@ output:
 # set result directory for plots etc.
 res_dir <- "../results/pilot_experiments/"
 data_dir <- "../data/"
-```
 
-```{r setup, results="hide"}
 ## Bioconductor
 library('edgeR')
 
@@ -31,7 +29,6 @@ loadfonts()
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 source("../R/utils.R")
-source("../R/normalization.R")
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
 cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
@@ -89,7 +86,7 @@ norm_facs <- get_norm_facs_nonzero(read_counts, pseudo_genes, count_min=1, sampl
 write.table(data.frame(nf=norm_facs), paste(res_dir, "norm_facs_L10_L30.csv", sep=""), row.names=T, quote=F)
 ```
 
-Estimate number of samples required for infection assay
+Estimate number of samples required for TraDIS infection screen
 
 ```{r}
 insertion_sites_in <- fread(paste(data_dir, "counts_pilot_TraDIS.csv.gz", sep=""), data.table = F, stringsAsFactors = F) %>% dplyr::select(matches("Min|locus"))
@@ -108,6 +105,7 @@ estimate_N_samples$n_genes_min2 <- sapply(estimate_N_samples$N_samples, function
     group_by(sel) %>% summarise(n_TIS=n()) %>% subset(n_TIS>2) %>% nrow()
 })
 
+# plot number of genes with at least 3 insertion sites for 1,000/2,000/3,000 insertion sites per sub-library
 p_N_samples <- estimate_N_samples %>% ggplot(aes(N_samples)) +
   geom_point(aes(y=n_genes_min1, col="1 k")) +
   geom_point(aes(y=n_genes_min2, col="2 k")) +
@@ -127,6 +125,8 @@ cairo_pdf(paste(res_dir, "N_samples_min3_TIS.pdf", sep=""), width = 3, height = 
 print(p_N_samples)
 dev.off()
 ```
+
+Calculate the number of insertion sites per gene for 40 parallel infections with 3,000 insertion sites each (in the input)
 
 ```{r, eval=F}
 df_40samples_list <- lapply(1:100, function(i) {
@@ -148,6 +148,8 @@ df_40samples$x <- 1.55
 df_40samples$x[which(df_40samples$n_TIS %in% c(20))] <- 1
 fwrite(df_40samples, paste0(res_dir, "sim40samples_run2.csv"), quote=T)
 ```
+
+Plot the number of insertion sites per gene for 40 parallel infections with 3,000 insertion sites each (in the input)
 
 ```{r}
 df_40samples <- fread(paste0(res_dir, "sim40samples.csv"), data.table=F, quote="\"")
@@ -174,7 +176,7 @@ print(p_pi)
 dev.off()
 ```
 
-create long data frame from L10/L30 libraries
+create long data frame from L10/L30 TraDIS libraries
 
 ```{r}
 dfit <- data.frame(gene=character(), it_g=integer(), type=character(), k=integer(), seq=character(), pos=integer(), sample=character(), raw=numeric(), stringsAsFactors=F)
@@ -193,6 +195,8 @@ dfit$it_sa <- as.numeric(dfit$sample)
 dfit_pseudo <- subset(dfit, type=="pseudo")
 ```
 
+Combine counts of corresponding minimally enriched input (Min) and output (Out) insertions sites
+
 ```{r}
 dfit_comp <- subset(dfit, grepl("Min", sample)) %>% subset(!duplicated(paste0(TI,lib.type)))
 dfit_comp <- rbind(cbind(dfit_comp, rep=1), cbind(dfit_comp, rep=2), cbind(dfit_comp, rep=3)) %>% arrange(lib.type)
@@ -206,7 +210,11 @@ dfit_stats <-  dfit_comp %>% group_by(sample, replicate) %>% summarize(nTI_in=le
 dfit_stats_pseudo <- dfit_comp %>% subset(type=="pseudo") %>% group_by(sample, replicate) %>% summarize(nTI_in=length(raw), nTI_out=length(which(raw_out>1)))
 ```
 
+Figure 1 D
+Plot number of insertion sites with more than 10 read counts for each library
+
 ```{r}
+# keep only insertion sites with more than 10 read counts
 dfit_NZ_sum <- dfit %>% subset(raw>=10) %>% group_by(lib.type, replicate, condition) %>% summarise(uTI=length(TI))
 dfit_NZ_sum$lib.type <- paste("Lib.", dfit_NZ_sum$lib.type, "k")
 dfit_NZ_sum$id <- paste0(dfit_NZ_sum$condition, "_R", dfit_NZ_sum$replicate)
@@ -214,6 +222,7 @@ dfit_NZ_sum$id <- factor(dfit_NZ_sum$id, levels=dfit_NZ_sum$id %>% unique())
 x_lab <- dfit_NZ_sum$replicate[match(dfit_NZ_sum$id %>% unique, dfit_NZ_sum$id)]
 dfit_NZ_sum$condition <- factor(dfit_NZ_sum$condition, levels=c("Min", "Inp", "Out"))
 
+# all libraries
 p_size_min <- ggplot(dfit_NZ_sum) +
   geom_col(aes(x=replicate, y=uTI, fill=condition), stat="identity", position=position_dodge(width=1, preserve = "single"), alpha=1, size=0) +
   facet_wrap(~lib.type) +
@@ -230,6 +239,7 @@ cairo_pdf(paste(res_dir, "pilot_exp_unique_IS_SI.pdf", sep=""), width = 3, heigh
 print(p_size_min)
 dev.off()
 
+# remove minimal input for main figure
 p_size <- ggplot(dfit_NZ_sum %>% subset(condition!="Min")) +
   geom_col(aes(x=replicate, y=uTI, fill=condition), stat="identity", position=position_dodge(width=1, preserve = "single"), alpha=1, size=0) +
   facet_wrap(~lib.type) +
@@ -250,6 +260,9 @@ cairo_pdf(paste(res_dir, "pilot_S1.pdf", sep=""), width = 6.9, height = 2.2, bg=
 cowplot::plot_grid(p_size_min, p_N_samples, p_pi, rel_widths = c(0.35, 0.35, 0.25), scale=c(0.95, 0.95, 0.73), ncol=3)
 dev.off()
 ```
+
+Figure 1E
+Vary bottleneck size between 100 and 6000, sample corresponding number of insertion sites from minimally enriched input samples, compare to actual number of TIS in output samples
 
 ```{r}
 counts_in <- read_counts[, grep("L10-Min", colnames(read_counts))]
@@ -299,6 +312,9 @@ print(p_bottle)
 dev.off()
 ```
 
+Figure 1H
+Compare enrichment of TraDIS libraries at 37 vs. 30C with RNA-seq of WT Shigella at 37 vs 30C
+
 ```{r, fig.show="asis"}
 tt_37vs30 <- read.table("../results/pilot_RNAseq_edgeR/tt_M90T_37vs30C.csv", header=T, sep="\t", quote="")
 tt_enr37vs30 <- read.table("../results/pilot_TraDIS_edgeR/tt_Enr_37_30.csv", header=T, sep="\t", quote="")
@@ -341,7 +357,8 @@ print(p_corr)
 dev.off()
 ```
 
-# Venn Diagrams
+Figure 1G - Venn Diagrams
+Overlap between TraDIS and RNA-seq pilot experiments
 
 ```{r}
 tt_virF_37 <- read.table("../results/pilot_RNAseq_edgeR/tt_M90TvsFd_37C.csv", header=T, sep="\t", quote="")
