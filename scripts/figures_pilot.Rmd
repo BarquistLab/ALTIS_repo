@@ -18,7 +18,6 @@ library('edgeR')
 ## CRAN
 library(ggplot2)
 library(dplyr)
-library(devEMF)
 library(viridis)
 library(data.table)
 library(extrafont)
@@ -29,6 +28,7 @@ loadfonts()
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 source("../R/utils.R")
+source("../R/normalization.R")
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
 cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")

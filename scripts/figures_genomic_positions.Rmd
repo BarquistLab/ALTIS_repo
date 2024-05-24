@@ -1,7 +1,7 @@
 ---
-title: "Shigella_tradis_infections_ZINB"
+title: "Plot genomic positions of pilot TraDIS data and input to TraDIS infection screen"
 author: "Laura Jenniches"
-date: "14/1/2022"
+date: "24/5/2024"
 output:
   pdf_document: default
   html_document: default
@@ -32,24 +32,15 @@ spa_orf10 <- subset(meta_data, com_id=="spa-orf10")$start
 library(knitr)
 
 library(ggplot2)
-library(pheatmap)
-library(viridis)
 library(ggrastr)
 library(ggrepel)
 
 library(tidyverse)
 library(data.table)
 
-library(cmdstanr)
-library(bayesplot)
-library(posterior)
-library(rstan)
-
-library(devEMF)
-
-source("../utils/prepare_data.R")
-source("../utils/analyze_stanfit.R")
-source("../utils/utils.R")
+source("../R/prepare_data.R")
+source("../R/analyze_stanfit.R")
+source("../R/utils.R")
 
 library(extrafont)
 # font_import("y")
@@ -66,8 +57,8 @@ cb_palette3 <- c("gray", "#d36c6c", "#5876A3")
 data_table_pos contains TIS on the positive strand, data_table_neg on the negative strand. TIS on the reverse strand are assigned to the same gene as on the forward strand
 
 ```{r}
-data_table_pos <- fread(paste(data_dir, "shigella_infections_counts_pos_meta.csv", sep=""), quote=F, data.table=F)
-data_table_neg <- fread(paste(data_dir, "shigella_infections_counts_neg_meta.csv", sep=""), quote=F, data.table=F)
+data_table_pos <- fread(paste(data_dir, "shigella_infections_counts_pos_meta.csv.gz", sep=""), quote=F, data.table=F)
+data_table_neg <- fread(paste(data_dir, "shigella_infections_counts_neg_meta.csv.gz", sep=""), quote=F, data.table=F)
 
 data_table_pos$TI <- paste(data_table_pos$seq, data_table_pos$pos, "pos", sep="_")
 data_table_neg$TI <- paste(data_table_neg$seq, data_table_neg$pos, "neg", sep="_")
@@ -77,7 +68,7 @@ data_table <- rbind(data_table_pos, data_table_neg)
 data_meta <- data_table %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
 read_counts <- data_table %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type", "TI"))
 
-pilot_TIS_in <- fread(paste(data_dir2, "shigella_tradis/edgeR/TraDIS_counts.csv", sep=""), data.table = F, stringsAsFactors = F)
+pilot_TIS_in <- fread(paste(data_dir, "counts_pilot_TraDIS.csv.gz", sep=""), data.table = F, stringsAsFactors = F)
 pilot_TIS_counts <- pilot_TIS_in %>% dplyr::select(-c("seq", "pos", "locus_tag", "k", "type"))
 ```
 

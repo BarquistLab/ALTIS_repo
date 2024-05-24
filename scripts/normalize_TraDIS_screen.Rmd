@@ -1,5 +1,5 @@
 ---
-title: "Shigella pilot experiments"
+title: "Normalize sequencing data from TraDIS infection screen and export for cmdstan"
 author: "Laura Jenniches"
 date: "17/4/2024"
 output:
@@ -24,11 +24,7 @@ meta_data$length <- meta_data$end - meta_data$start + 1
 library(knitr)
 
 library(ggplot2)
-library(pheatmap)
 library(ggcorrplot)
-library(viridis)
-library(ggrastr)
-library(ggrepel)
 
 library(tidyverse)
 library(data.table)
@@ -37,8 +33,6 @@ library(cmdstanr)
 library(bayesplot)
 library(posterior)
 library(rstan)
-
-library(devEMF)
 
 library(extrafont)
 # font_import("y")
@@ -316,18 +310,6 @@ sample_labs <- colnames(data_table)[grep("INPUT|OUTPUT", colnames(data_table))]
 sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% as.factor %>% as.numeric)
 # shift experiment index because of Lib11 removal (try without shifting to agree with experimental figures)
 sample_stats$exp_id[which(sample_stats$exp_id>10)] <- sample_stats$exp_id[which(sample_stats$exp_id>10)] - 1
-```
-
-```{r}
-dfit_org <- fread(paste0(res_dir, "dfit_all_org.csv"), quote=F, data.table=F)
-dfit_new <- fread(paste0(res_dir, "dfit_all.csv"), quote=F, data.table=F) %>% mutate(it_g_org=dfit_org$it_g[match(locus_tag, dfit_org$locus_tag)])
-dfit_pseudo_org <- fread(paste0(res_dir, "dfit_pseudo_org.csv"), quote=F, data.table=F)
-dfit_pseudo <- fread(paste0(res_dir, "dfit_pseudo.csv"), quote=F, data.table=F)
-
-counts_org <- fread(paste0(res_dir, "counts_all_org.csv"), quote=F, data.table=F)
-counts_new <- fread(paste0(res_dir, "counts_all.csv"), quote=F, data.table=F)
-
-subset(dfit_new, it_g/it_g_org!=1) %>% head()
 ```
 
 ```{r}
