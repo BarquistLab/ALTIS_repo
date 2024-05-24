@@ -23,4 +23,3 @@
 *.sav
 *.stderr
 *.stdout
-results/*
