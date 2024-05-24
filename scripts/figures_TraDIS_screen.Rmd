@@ -1,17 +1,22 @@
 ---
-title: "Shigella pilot experiments"
+title: "Compute fitness scores and create figures for Shigella infection screen with the cmdstan results"
 author: "Laura Jenniches"
-date: "17/4/2024"
+date: "24/5/2024"
 output:
   pdf_document: default
   html_document: default
 ---
+
+!!!! Note !!!!
+Running this script requires normalizing the data first (normalize_TraDIS_screen.Rmd).
 
 ```{r global-options, include=FALSE}
 # set result directory for plots etc.
 res_dir <- "../results/TraDIS_screen/"
 norm_dir <- "../results/normalize_TraDIS_screen/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 
 # load meta data for Shigella
 meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)

@@ -1,7 +1,7 @@
 ---
 title: "Normalize sequencing data from TraDIS infection screen and export for cmdstan"
 author: "Laura Jenniches"
-date: "17/4/2024"
+date: "24/5/2024"
 output:
   pdf_document: default
   html_document: default
@@ -11,6 +11,8 @@ output:
 # set result directory for plots etc.
 res_dir <- "../results/normalize_TraDIS_screen/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 
 # load meta data for Shigella
 meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)
@@ -61,6 +63,10 @@ data_table_neg$TI <- paste(data_table_neg$seq, data_table_neg$pos, "neg", sep="_
 
 data_table <- rbind(data_table_pos, data_table_neg)
 ```
+
+Plot number of unique transposon insertion sites (TIS) of inoculum (input) and intracellular bacteria (output). Plot fraction of zeros in output libraries as compared to the respective input library
+
+Remove replicate 11 because the number of TIS and sequencing reads in the input library is too low.
 
 ```{r}
 data_meta <- data_table %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
@@ -204,6 +210,8 @@ pca_df <- cbind(pca_raw$x %>% as.data.frame(),
 pca_imp <- summary(pca_raw)$importance[2,]
 ```
 
+The PCA reveals the pair-wise (input-output pairs) structure of the data.
+
 ```{r}
 p_pca <- ggplot(pca_df, aes(x=PC1, y=PC2)) +
   # geom_point(aes(col=condition, label=exp_id)) +
@@ -226,6 +234,8 @@ dev.off()
 save(p_pca, file=paste0(res_dir, "p_pca.Rdata"))
 ```
 
+Also the correlation between the samples shows the pair-wise structure.
+
 ```{r}
 sample_corr <- round(cor(logcounts), 1)
 cond_rm11 <- cond %>% subset(exp_id!=11) %>% arrange(exp_id, condition)
@@ -246,56 +256,7 @@ print(p_corr)
 dev.off()
 ```
 
-```{r}
-sample_corr <- round(cor(logcounts), 1)
-cond_rm11 <- cond %>% subset(exp_id<4 | exp_id>40) %>% arrange(exp_id, condition)
-sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
-sample_corr <- cbind(sample_corr, Lib4_INPUT=rep(0,12))
-sample_corr <- rbind(sample_corr, Lib4_INPUT=rep(0,13))
-sample_corr <- sample_corr[order(rownames(sample_corr)), order(colnames(sample_corr))]
-p_corr_zoom <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette3[1], "white", cb_palette3[2]))
-
-p_corr_zoom <- p_corr_zoom +
-  scale_x_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,4,41,42,43), "_INPUT"), labels=c(1,2,3, "",41,42,43)) +
-  scale_y_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,4,41,42,43), "_INPUT"), labels=c(1,2,3, "",41,42,43)) +
-  ggtitle("Correlation matrix") +
-  theme_bw(base_size=10) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")), axis.title=element_blank(),
-        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), strip.text = element_blank(), panel.spacing = unit(0.1, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p_corr_zoom)
-cairo_pdf(paste(res_dir, "shigella_corr_mat_1-10.pdf", sep=""), width = 1.3, height = 1.5)
-print(p_corr_zoom)
-dev.off()
-
-cond_rm11 <- cond %>% subset(exp_id<3 | exp_id>41) %>% arrange(exp_id, condition)
-sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
-sample_corr <- cbind(sample_corr, Lib4_INPUT=rep(0,12))
-sample_corr <- rbind(sample_corr, Lib4_INPUT=rep(0,13))
-sample_corr <- sample_corr[order(rownames(sample_corr)), order(colnames(sample_corr))]
-p_corr_zoom <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette3[1], "white", cb_palette3[2]))
-
-p_corr_zoom <- p_corr_zoom +
-  scale_x_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
-  scale_y_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
-  # ggtitle("Normalization") +
-  theme_bw(base_size=10) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")), axis.title=element_blank(),
-        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), strip.text = element_blank(), panel.spacing = unit(0.1, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p_corr_zoom)
-cairo_pdf(paste(res_dir, "shigella_corr_mat_small.pdf", sep=""), width = 1.1, height = 1, bg="transparent")
-print(p_corr_zoom)
-dev.off()
-
-save(p_corr_zoom, file=paste0(res_dir, "p_corr_zoom.Rdata"))
-```
+Remove TIS from intergenic regions and replace read counts lower than 20 by zero. The sequencing depth is so high that TIS with fewer than 20 counts should be treated in the same way as zeros. Since the zero-inflated negative binomial (ZINB) model treats low counts fundamentally different from zero, this step is necessary to assure that the ZINB is an adequat description of the data
 
 ```{r}
 data_meta <- data_table %>% subset(type!="inter") %>% dplyr::select(c("seq", "pos", "locus_tag", "k", "type", "TI"))
@@ -312,6 +273,8 @@ sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% as.factor %>%
 sample_stats$exp_id[which(sample_stats$exp_id>10)] <- sample_stats$exp_id[which(sample_stats$exp_id>10)] - 1
 ```
 
+Export data in cmdstanr format (Shigella_pseudo_data.R, saved in res_dir). For more details, refer to the create_dfit function in prepare_data.R. This step can be skipped when running the script multiple times.
+
 ```{r}
 lab <- "all"
 create_dfit(data_table, sample_stats, lab, description="", res_dir)
@@ -320,6 +283,8 @@ lab <- "pseudo"
 data_table_pseudo <- subset(data_table, type==lab)
 create_dfit(data_table_pseudo, sample_stats, lab, description="", res_dir)
 ```
+
+Here, we load the count tables, where genes are ordered in the same way as in the exported data for cmdstan. This is important to assure that the index of the cmdstan results can be assigned to the correct gene.
 
 ```{r}
 # load count data and export to cmdstan format
@@ -330,12 +295,20 @@ locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
 dfit_NZ <- export_cmdstan(dfit_file, counts_file, res_dir, lab, norm_fac=rep(0, 42), organism="Shigella")
 ```
 
+Run the Stan model (ZINB_pair2_norm.stan) with cmdstan. Provide the data file Shigella_pseudo_data.R as input. The resulting csv file should be copied to data_dir. Alternatively, our results from running cmdstan, which are already contained in data_dir, can be used.
+
+For more information, please consult the model descriptions in ZINB_model_TraDIS_screens.pdf. Information on how to run cmdstan can be found in README.md.
+
+Load cmdstan results for ZINB_pair2_norm.stan.
+
 ```{r}
 results_samples <- rbind(
   cbind(fread(cmd=sprintf('zcat %s | grep -v "#"', paste(data_dir, "Shigella_", lab, "_1.csv.gz", sep="")), quote=F, data.table=F), Chain=1),
   cbind(fread(cmd=sprintf('zcat %s | grep -v "#"', paste(data_dir, "Shigella_", lab, "_2.csv.gz", sep="")), quote=F, data.table=F), Chain=2)
 ) # for data from external cmdstan run
 ```
+
+Extract technical parameters from ZINB_pair2_norm.stan
 
 ```{r}
 sample_stats <- sample_stats %>% arrange(exp_id)
@@ -345,6 +318,8 @@ mu_logFC <- results_samples[, c("mu")] %>% median
 a_in <- apply(results_samples[, c("a.1", "a.2")], 2, median)
 b <- results_samples[,"b"] %>% median
 ```
+
+Export full dataset (Shigella_all_Bnorm_data.R) to res_dir and save normalized read counts in a long dataframe (dfit_NZ_norm.csv). Run the Stan model ZINB_pair2_logFC.stan with cmdstan and copy the resulting csv file to data_dir. Alternatively, use our cmdstan results provided in the data_dir directory.
 
 ```{r}
 # load count data and export to cmdstan format
@@ -362,6 +337,8 @@ gene_stats$drop_out <- gene_stats$n_gz/gene_stats$n_g
 
 fwrite(dfit_NZ, paste0(res_dir, "dfit_NZ_norm.csv"), quote=F)
 ```
+
+Compare read count distributions across all input and output samples.
 
 ```{r}
 dfit_NZ <- dfit_NZ %>% mutate(alpha_in=log(raw*n_ps+0.01), alpha_out=log(raw_out+0.01))
@@ -402,6 +379,8 @@ dev.off()
 
 save(p_norm1, file=paste0(res_dir, "p_norm1.Rdata"))
 ```
+
+Zoom into tail region. If correctly normalized, the two distributions should overlap in the far end of the tail region (which they do).
 
 ```{r}
 p_norm2 <- ggplot() +

@@ -7,10 +7,14 @@ output:
   html_document: default
 ---
 
+The figures created with this script will be stored in res_dir
+
 ```{r global-options, include=FALSE}
 # set result directory for plots etc.
 res_dir <- "../results/TraDIS_genomic_positions/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 
 # load meta data for Shigella
 meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)
