@@ -20,6 +20,8 @@ output:
 # set result directory for plots etc.
 res_dir <- "../results/pilot_TraDIS_edgeR/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 ```
 
 ```{r setup, results="hide"}
@@ -38,6 +40,7 @@ library(extrafont)
 # fonts()
 loadfonts()
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
@@ -114,12 +117,14 @@ colnames(design) <- levels(group)
 The data was normalized using edgeR trimmed mean of M-values (TMM).
 
 ## Boxplot before normalization
+
 ```{r}
 pseudoCounts <- log2(dgeAll$counts+1)
 boxplot(pseudoCounts, col="gray", las=3)
 ```
 
 ## Boxplot after normalization
+
 ```{r}
 boxplot(pseudoNormCounts, col="gray", las=3)
 ```

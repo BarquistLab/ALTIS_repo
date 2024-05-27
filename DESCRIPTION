@@ -14,20 +14,23 @@ LazyData: true
 Imports:
     data.table,
     tidyverse,
+    extrafont,
     ggplot2,
-    viridis,
+    gplots,
     bayesplot,
     rstan,
     stringr,
     Cairo,
     wCorr,
+    RColorBrewer,
+    cowplot,
+    bayesplot,
+    pheatmap,
+    ggcorrplot,
+    ggrastr,
+    ggrepel,
     MASS
 Suggests:
-    cowplot,
     cmdstanr,
-    posterior,
-    loo,
-    ggpubr,
-    ggrastr
 RoxygenNote: 7.2.3
 URL: http://github.com/BarquistLab/Shigella_TraDIS_repo

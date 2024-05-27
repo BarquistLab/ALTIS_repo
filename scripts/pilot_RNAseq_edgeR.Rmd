@@ -11,6 +11,8 @@ output:
 # set result directory for plots etc.
 res_dir <- "../results/pilot_RNAseq_edgeR/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 ```
 
 ```{r setup, results="hide"}
@@ -25,10 +27,11 @@ library('pheatmap')
 library('dplyr')
 library('data.table')
 library(extrafont)
-# font_import("y")
+# font_import()
 # fonts()
 loadfonts()
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")

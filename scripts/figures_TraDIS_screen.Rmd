@@ -8,7 +8,7 @@ output:
 ---
 
 !!!! Note !!!!
-Running this script requires normalizing the data first (normalize_TraDIS_screen.Rmd).
+Running this script requires normalizing the data and running cmdstan first (see normalize_TraDIS_screen.Rmd). The cmdstan results are also provided in the directory "data".
 
 ```{r global-options, include=FALSE}
 # set result directory for plots etc.
@@ -28,23 +28,17 @@ meta_data$length <- meta_data$end - meta_data$start + 1
 ```{r setup, results="hide"}
 ## CRAN
 library(knitr)
+library(Cairo)
 
 library(ggplot2)
-library(pheatmap)
-library(ggcorrplot)
-library(viridis)
 library(ggrastr)
 library(ggrepel)
 
 library(tidyverse)
 library(data.table)
 
-library(cmdstanr)
 library(bayesplot)
-library(posterior)
 library(rstan)
-
-library(devEMF)
 
 library(extrafont)
 # font_import("y")
@@ -55,6 +49,7 @@ source("../R/prepare_data.R")
 source("../R/analyze_stanfit.R")
 source("../R/utils.R")
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570", "#F0845D")
@@ -62,6 +57,9 @@ cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
 cb_palette3 <- c("#424242", "#d36c6c")
 ```
 
+Load cmdstan results from ZINB_pair2_logFC.stan
+
+Load "long" data frame with count data (one insertion site per row including input/output counts and meta data like normalization factor).
 
 ```{r}
 lab <- "all_Bnorm"
@@ -72,6 +70,8 @@ results_samples <- rbind(
 ) # for data from external cmdstan run
 ```
 
+Calculate sampling median of technical parameters and add this information to long count data frame.
+
 ```{r}
 gamma_sa <- apply(results_samples[, grep("gamma", colnames(results_samples))], 2, median)
 a <- apply(results_samples[, c("a.1", "a.2")], 2, median)
@@ -79,9 +79,13 @@ dfit_NZ$gamma_sa <- gamma_sa[match(dfit_NZ$exp_id, 1:42)]
 dfit_NZ$theta_g <- (dfit_NZ$gamma_sa + a[1] + a[2]*(dfit_NZ$alpha_in-dfit_NZ$alpha_sa)) %>% sapply(logit_m1)
 ```
 
+Assign mean log-counts, fitness scores (log-fold changes), and gene-wise dispersion to locus tags. Retrieve order of genes saved during normalization (counts_all.csv).
+
+Calculate Bayesian p-values, Bayes' factors and z-scores.
+
 ```{r}
 locus_tags <- fread(paste0(norm_dir, "counts_all.csv"), data.table=F) %>% pull("locus_tag") %>% unique
-gene_stats <- dfit_NZ %>% group_by(locus_tag, it_g) %>% summarise(n_gz=length(which(raw_out==0)), n_g=length(raw), logcpm_in=mean(logcpm))
+gene_stats <- dfit_NZ %>% group_by(locus_tag, it_g) %>% summarise(n_gz=length(which(raw_out==0)), n_g=length(raw), logcpm_in=mean(log(raw*n_ps)))
 gene_stats$drop_out <- gene_stats$n_gz/gene_stats$n_g
 
 results_fit <- data.frame(
@@ -97,8 +101,10 @@ results_fit$description <- meta_data$description[match(results_fit$locus_tag, me
 
 results_fit$n_TIS <- gene_stats$n_g[match(results_fit$locus_tag, gene_stats$locus_tag)]
 results_fit$n_nz <- gene_stats$n_g[match(results_fit$locus_tag, gene_stats$locus_tag)] - gene_stats$n_gz[match(results_fit$locus_tag, gene_stats$locus_tag)]
+results_fit$logCPM <- gene_stats$logcpm_in[match(results_fit$locus_tag, gene_stats$locus_tag)]
 
 results_fit$inv_rho_g <- apply(results_samples[, grep("inv_rho_g", colnames(results_samples))], 2, median)
+
 results_fit$logFC <- apply(results_samples[, grep("logFC_g", colnames(results_samples))], 2, median)
 results_fit$sd_logFC <- apply(results_samples[, grep("logFC_g", colnames(results_samples))], 2, sd)
 logFC_pseudo <- results_fit %>% subset(type=="pseudo") %>% pull(logFC) %>% median()
@@ -107,19 +113,7 @@ results_fit$bayes_factor <- apply(results_samples[, grep("logFC_g", colnames(res
 results_fit$z <- results_fit$logFC/results_fit$sd_logFC
 ```
 
-```{r}
-# modelling of dispersion, pseudo counts: raw/M*2000
-dfit_NZ$logFC <- results_fit$logFC[match(dfit_NZ$locus_tag, results_fit$locus_tag)]
-dfit_NZ_out <- dfit_NZ %>% subset(raw_out>0) %>% group_by(it_g, locus_tag) %>%
-  summarise(alpha_g=mean(log(raw*n_ps)), mu=mean(raw*n_ps*exp(logFC)), mu2=sum((raw*n_ps*exp(logFC))^2), sigma2=var(raw*n_ps*exp(logFC)), alpha_out=mean(log(raw_out)))
-dfit_NZ_out$sigma2[which(is.na(dfit_NZ_out$sigma2))] <- 0
-dfit_NZ_out$inv_rho <- sapply((dfit_NZ_out$sigma2 - dfit_NZ_out$mu)/dfit_NZ_out$mu^2, function(x) max(x,0))
-
-dfit_NZ_stats <- dfit_NZ %>% group_by(it_g, locus_tag) %>%
-  summarise(alpha_g=mean(log(raw*n_ps)), mu=mean(raw*n_ps*exp(logFC)), mu2=sum((raw*n_ps*exp(logFC))^2), sigma2=var(raw*n_ps*exp(logFC)), fraction0s=length(which(raw_out==0))/length(raw_out), logCPM=log(raw*n_ps/N*10^6))
-dfit_NZ_stats$sigma2[which(is.na(dfit_NZ_stats$sigma2))] <- 0
-dfit_NZ_stats$inv_rho <- sapply((dfit_NZ_stats$sigma2 - dfit_NZ_stats$mu)/dfit_NZ_stats$mu^2,function(x) max(x,0))
-```
+Plot the distribution of the number of insertion sites per gene as a pie plot.
 
 ```{r}
 results_fit_nTI <- results_fit
@@ -158,7 +152,7 @@ print(p_pi)
 dev.off()
 ```
 
-# Add FDR
+Add FDR to z-scores by comparing to a standard normal distribution. See function calc_FDR_z in analyze_stanfit.R for details.
 
 ```{r}
 results_fit <- results_fit %>% subset(n_TIS>2)
@@ -166,15 +160,14 @@ results_fit$FDR <- 1
 results_fit$FDR[which(results_fit$z<=0)] <- calc_FDR_z(results_fit$z[which(results_fit$z<=0)], 0.9)
 results_fit$FDR[which(results_fit$z>0)] <- calc_FDR_z(-results_fit$z[which(results_fit$z>0)], 0.9)
 
-results_fit$logCPM <- dfit_NZ_stats$logCPM[match(results_fit$locus_tag, dfit_NZ_stats$locus_tag)]
-
 theta_sa <- exp(gamma_sa)/(1+exp(gamma_sa))
 gamma_med <- gamma_sa %>% median()
 theta_med <- exp(gamma_med)/(1+exp(gamma_med))
 ```
 
-## Abundance dependent drop-out
-We observe an abundance dependent drop-out, which we tried to account for during the modelling. Further down, we compare the modelling results with and without abundance dependent drop-out. In the following plot, we see the actual abundance dependent drop-out, which we can observe in the data and we can compare it to the modelling results for abundance dependent drop-out. The curve is not expected to fit to the data points since the observed drop-out is a combination of drop-out because of gene essentiality and bottleneck effects. We actually seem to observe a lower drop-out than expected statistically for lowly abundant mutants and a higher drop-out for highly abundant mutants. This might reflect the fact that genes which are essential in media are not necessarily essential during the infection process and vice versa. In addition, the plasmid has more insertions in media, either because it is not very important for survival in media or because transposons are more likely to insert there.
+Abundance dependent drop-out
+
+We accounted for stochastic loss in our ZINB model. Here, we compare the calculated loss per input abundance bin to the model result. The curve is not expected to fit to the data points exactly since the observed loss is a combination of gene essentiality and bottleneck effects.
 
 ```{r}
 breaks=(-20:20)/2
@@ -193,7 +186,7 @@ line_df$y <- exp(line_df$p)/(1+exp(line_df$p))
 p_drop <- ggplot(sum_mu) +
   geom_point(aes(x=bin, y=height_dropout_mu/height_mu, col="data", alpha="data"), size=1) +
   geom_line(aes(x=x, y=y, col="fit", alpha="fit"), data=line_df) +
-  scale_color_manual(name="", values=c(viridis(1), "black")) +
+  scale_color_manual(name="", values=c(cb_palette[1], "black")) +
   scale_alpha_manual(name="", values=c(0.6, 1)) +
   scale_x_continuous(name=expression(paste(alpha,"-",bar(alpha))), limits=c(-5,2)) +
   scale_y_continuous(name="dropout", breaks=c(0,0.5,1)) + #, sec.axis = sec_axis( trans=~.*3000, name="abundance")) +
@@ -207,145 +200,9 @@ print(p_drop)
 cairo_pdf(paste(res_dir, "dropout_abundance.pdf", sep=""), width = 3, height = 2.2)
 print(p_drop)
 dev.off()
-
-p <- ggplot(sum_mu) +
-  geom_point(aes(x=bin, y=height_dropout_mu/height_mu, col="data", alpha="data"), size=0.8) +
-  geom_line(aes(x=x, y=y, col="fit", alpha="fit"), data=line_df) +
-  scale_color_manual(name="", values=c(viridis(1), "black")) +
-  scale_alpha_manual(name="", values=c(0.6, 1)) +
-  scale_x_continuous(name="abundance", breaks=c(-4,-2,0,2), labels=rep("",4), limits=c(-5,2)) +
-  scale_y_continuous(name="dropout", breaks=c(0,0.5,1)) + #, sec.axis = sec_axis( trans=~.*3000, name="abundance")) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")),
-        axis.text.x=element_blank(),
-        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p)
-cairo_pdf(paste(res_dir, "dropout_abundance_small.pdf", sep=""), width = 1.1, height = 0.8, bg="transparent")
-print(p)
-dev.off()
-
-
-nbinom_df <- data.frame(x=0:6000)
-nbinom_df$count <- dnbinom(nbinom_df$x, size=4, mu=2741)*0.78
-draw_nbinom <- c(rep(0, 7000), rnbinom(5000, size=2, mu=2741))
-p <- ggplot(dfit_NZ %>% subset(raw <= 6000 & raw_out <= 6000)) +
-  geom_histogram(aes(x=raw, y=..density.., col="in", fill="in"), alpha=0.4, bins=15) +
-  geom_histogram(aes(x=raw_out, y=..density.., col="out", fill="out"), alpha=0.4, bins=15) +
-  # geom_line(aes(x=x, y=count), data=nbinom_df, col="red") +
-  # geom_density(aes(x), fill="transparent", col="red", data=data.frame(x=draw_nbinom) %>% subset(x<=6000)) +
-  scale_color_viridis_d(name="") +
-  scale_fill_viridis_d(name="") +
-  xlab("raw count") +
-  scale_y_continuous(name="density") + #, sec.axis = sec_axis( trans=~.*3000, name="abundance")) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")),
-        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p)
-cairo_pdf(paste(res_dir, "shigella_hist_in.pdf", sep=""), width = 3, height = 2.2)
-print(p)
-dev.off()
 ```
 
-find genes where TIS follow an NB distribution
-
-```{r}
-results_sel <- results_fit %>% subset(n_TIS>40) %>% arrange(-n_TIS) %>% head(20)
-lab <- results_sel$locus_tag[5]
-mu_in <- dfit_NZ %>% subset(locus_tag==lab & raw<7500 & raw>500) %>% pull(raw) %>% mean()
-var_in <- dfit_NZ %>% subset(locus_tag==lab & raw<7500 & raw>500) %>% pull(raw) %>% var()
-disp_in <- mu_in^2/(var_in - mu_in)
-mu_out <- dfit_NZ %>% subset(locus_tag==lab & raw_out/n_ps<7500 & raw_out/n_ps>500) %>% mutate(raw_out_norm=raw_out/n_ps) %>% pull(raw_out_norm) %>% mean()
-var_out <- dfit_NZ %>% subset(locus_tag==lab & raw_out/n_ps<7500 & raw_out/n_ps>500) %>% mutate(raw_out_norm=raw_out/n_ps) %>% pull(raw_out_norm) %>% var()
-disp_out <- mu_out^2/(var_out - mu_out)
-nbinom_df <- data.frame(x=0:10000)
-nbinom_df$count_in <- dnbinom(nbinom_df$x, size=disp_in, mu=mu_in)
-nbinom_df$count_out <- dnbinom(nbinom_df$x, size=disp_out, mu=mu_out)
-draw_nbinom <- c(rep(0, 6500), rnbinom(8500, size=disp_out, mu=mu_out))
-p_hist_gene <- dfit_NZ %>% subset(locus_tag==lab & raw<=10000 & raw_out/n_ps<=10000) %>%
-  ggplot() +
-  geom_histogram(aes(x=raw, fill="in"), col="transparent", alpha=0.4, bins=20) +
-  geom_histogram(aes(x=raw_out/n_ps, fill="out"), col="transparent", alpha=0.4, bins=20) +
-  geom_line(aes(x=x, y=count_in*1.5e5, col="in"), data=nbinom_df) +
-  # geom_line(aes(x=x, y=count_out, col="out"), data=nbinom_df) +
-  geom_density(aes(x, y=(..count..)*10, col="out"), adjust=0.8, fill="transparent", data=data.frame(x=draw_nbinom) %>% subset(x<=10000)) +
-  scale_color_manual(name="", values=cb_palette3) +
-  scale_fill_manual(name="", values=cb_palette3) +
-  xlab("raw count") +
-  scale_y_continuous(name="count", limits=c(0, 200)) + #, sec.axis = sec_axis( trans=~.*3000, name="abundance")) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")),
-        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p_hist_gene)
-cairo_pdf(paste(res_dir, "read_counts_fimD.pdf", sep=""), width = 3, height = 2.2)
-print(p_hist_gene)
-dev.off()
-```
-
-Dispersion after infection:
-
-```{r}
-# dispersion
-low_var <- results_fit$locus_tag[which((results_fit$n_TIS > 2))]
-dfit_NZ_stats$inv_rho_fit <- results_fit$inv_rho_g[match(dfit_NZ_stats$locus_tag, results_fit$locus_tag)]
-dfit_NZ_stats$com_id <- meta_data$com_id[match(dfit_NZ_stats$locus_tag, meta_data$locus_tag)]
-
-p_disp <- ggplot(dfit_NZ_stats %>% subset(locus_tag %in% low_var), aes(x=log(mu))) +
-  rasterize(geom_point(aes(y=sqrt(inv_rho), col="calc"), alpha=0.4)) +
-  rasterize(geom_point(aes(y=inv_rho_fit, col="ZINB"), alpha=0.4)) +
-  scale_y_continuous(limits=c(0,4)) +
-  scale_color_manual(name="", values=c("orange", viridis(1))) +
-  ylab("BCV") +
-  xlab(expression(alpha)) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")),
-        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p_disp)
-cairo_pdf(paste(res_dir, "dispersion_output.pdf", sep=""), width = 3, height = 2.2)
-print(p_disp)
-dev.off()
-```
-
-## Statistical significance
-Instead of using posterior predictive p values, we can use z values ($z=logFC/logFC$). This was described by (Efron 2008). Under the null hypothesis, the z values should follow a standard normal distribution. We assume that more than 90% of genes have no fitness effect (i.e. $p_0=0.9$). Since we are mostly interested in genes with a positive fitness effect (negative log-fold change), we control the FDR for negative z. For a given cutoff on $z$, $z_q$ ($q$ is the level at which we control the FDR), the FDR is given by the number of genes with $z\leq z_q$ expected under the null hypothesis ($p_0 cN(zq|0,1)Ng$) divided by the number of genes in the dataset with $z\leq z_q$:
-$FDR=p0 cN(z_q|0,1)Ng /|\{z|z\leq z_q\}|$
-$cN(z|0,1)$ is the cumulative standard normal distribution.
-Additionally, Bayes factors can be used to adjust for prior assumptions. Since also Bayes factors need multiple testing control, their FDR can be controlled using z values as described above. 
-
-
-```{r}
-results_fit$logN_TI_bin <- (log10(results_fit$n_TIS)*2) %>% ceiling
-results_fit_sum <- results_fit %>% group_by(logN_TI_bin) %>% summarise(frac=length(which(seq=="CP037924.1"))/n())
-results_fit$frac <- results_fit_sum$frac[match(results_fit$logN_TI_bin, results_fit_sum$logN_TI_bin)]
-
-p_z_TIS <- ggplot(results_fit  %>% arrange(type), aes(x=(logN_TI_bin)/2, y=z)) +
-  geom_violin(aes(group=logN_TI_bin %>% ceiling, fill=frac), scale="width", alpha=0.5) +
-  scale_fill_gradientn(name="Plasmid\n genes", colours=cb_palette[1:4], breaks=c(0, 0.5, 1)) +
-  geom_hline(yintercept=0, linetype="dashed") +
-  # geom_vline(xintercept=log10(3), linetype="dashed") +
-  scale_x_continuous(name=expression(paste(log[10], "(nr. TIS)"))) +
-  theme(rect=element_rect(fill="transparent"),
-        axis.line=element_line(linewidth=unit(0.1, "pt")),
-        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
-        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
-        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
-        panel.grid=element_blank(), axis.text=element_text(color = "black"))
-print(p_z_TIS)
-cairo_pdf(paste(res_dir, "z_n_TIS_violin.pdf", sep=""), width = 3, height = 2.2)
-print(p_z_TIS)
-dev.off()
-```
+Distribution of z-scores compared to standard normal distribution.
 
 ```{r}
 results_fit_cleaned <- results_fit
@@ -391,10 +248,12 @@ print(p_h0)
 dev.off()
 ```
 
-Calculate False Discover Rate (FDR) using z values
+Export result tables with log2CPM values, log2-fold changes, z-scores and FDR. Plot FDR vs. z-score.
 
 ```{r}
+# convert log-fold changes to log2-fold changes
 results_export <- results_fit_cleaned %>% mutate(log2FC=log2(exp(logFC)), log2CPM=log2(exp(logCPM)))
+# calculate median log2CPM
 fwrite(results_export %>% mutate(log2CPM=log2CPM+log2FC/2) %>% dplyr::select(c("locus_tag", "com_id", "description", "type", "length", "n_TIS", "n_nz", "log2CPM", "log2FC", "z", "FDR")), paste0(res_dir, "results_ZINB_pair_logFC.csv"))
 
 fwrite(results_export %>% mutate(log2CPM=log2CPM+log2FC/2)  %>% subset(locus_tag %in% subset(meta_data, seq=="CP037923.1")$locus_tag) %>% dplyr::select(c("locus_tag", "com_id", "description", "type", "length", "n_TIS", "n_nz", "log2CPM", "log2FC", "z", "FDR")), paste0(res_dir, "results_ZINB_pair_logFC_chrom.csv"))
@@ -418,6 +277,8 @@ cairo_pdf(paste(res_dir, "z_FDR.pdf", sep=""), width = 3, height = 2.2)
 print(p_FDR)
 dev.off()
 ```
+
+Example: insertion sites in gene EKN05_000820 across all input and output libraries.
 
 ```{r}
 dfit_NZ <- dfit_NZ %>% mutate(alpha_in=log(raw*n_ps+0.01), alpha_out=log(raw_out+0.01))
@@ -453,6 +314,8 @@ cairo_pdf(paste(res_dir, "raw_TIS.pdf", sep=""), width = 1.5, height = 2.4)
 print(p_raw)
 dev.off()
 ```
+
+Stochastic (technical) loss for all insertion sites in gene EKN05_000820. Input and output counts for gene EKN05_000820 after normalization and correction for stochastic loss.
 
 ```{r}
 x <- (-150:150)/30
@@ -529,12 +392,12 @@ print(p_model)
 dev.off()
 ```
 
-## MA plot
-We can compare the logFC to the input abundance. This gives something comparable to the common MA plots. 
+MA plot
+Gene-wise log2-fold change vs. mean log2CPM (mean of input and output).
 
 ```{r}
 # MA plot
-p_MA <- ggplot(results_fit_cleaned %>% arrange(type), aes(x=logCPM+logFC/2, y=logFC)) +
+p_MA <- ggplot(results_fit_cleaned %>% arrange(type), aes(x=log2(exp(logCPM+logFC/2)), y=log2(exp(logFC)))) +
   geom_hline(yintercept=0, linetype="dashed") +
   geom_point(aes(col=type, alpha=type), size=0.5) +
   geom_point(aes(alpha="FDR\u22640.2", col="FDR\u22640.2"), shape=1, size=1, data=subset(results_fit_cleaned, FDR<=0.2)) +
@@ -543,6 +406,7 @@ p_MA <- ggplot(results_fit_cleaned %>% arrange(type), aes(x=logCPM+logFC/2, y=lo
   scale_color_manual(values=cb_palette2[c(3,6,4,2)], breaks=c("CDS", "pseudo", "FDR\u22640.2", paste0("FDR\u2264", p_max))) +
   scale_alpha_manual(values=c(0.35, 0.6, 1, 1), breaks=c("CDS", "pseudo", "FDR\u22640.2", paste0("FDR\u2264", p_max))) +
   scale_x_continuous(name="logCPM") +
+  scale_y_continuous(name="logFC") +
   theme(rect=element_rect(fill="transparent"),
         axis.line=element_line(linewidth=unit(0.1, "pt")),
         legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
@@ -555,8 +419,10 @@ print(p_MA)
 dev.off()
 ```
 
+MA plot for chromosomal genes.
+
 ```{r}
-p_MA_chrom <- ggplot(results_fit_cleaned %>% subset(seq=="CP037923.1") %>% arrange(type), aes(x=logCPM+logFC/2, y=logFC)) +
+p_MA_chrom <- ggplot(results_fit_cleaned %>% subset(seq=="CP037923.1") %>% arrange(type), aes(x=log2(exp(logCPM+logFC/2)), y=log2(exp(logFC)))) +
   geom_hline(yintercept=0, linetype="dashed") +
   geom_point(aes(col=type, alpha=type), size=1) +
   geom_point(aes(alpha="adv. FDR\u22640.2", col="adv. FDR\u22640.2"), shape=1, size=1.5, data=subset(results_fit_cleaned, FDR<=0.2 & seq=="CP037923.1" & logFC<0)) +
@@ -567,6 +433,7 @@ p_MA_chrom <- ggplot(results_fit_cleaned %>% subset(seq=="CP037923.1") %>% arran
   scale_color_manual(name="", values=cb_palette2[c(3,6,4,5,2,1)], breaks=c("CDS", "pseudo", "adv. FDR\u22640.2", "detr. FDR\u22640.2", paste0("adv. FDR\u2264", p_max), paste0("detr. FDR\u2264", p_max), paste0("FDR\u2264", p_max))) +
   scale_alpha_manual(name="", values=c(0.35, 0.6, 1, 1, 1, 1), breaks=c("CDS", "pseudo", "adv. FDR\u22640.2", "detr. FDR\u22640.2", paste0("adv. FDR\u2264", p_max), paste0("detr. FDR\u2264", p_max), paste0("FDR\u2264", p_max))) +
   scale_x_continuous(name="logCPM") +
+  scale_y_continuous(name="logFC") +
   theme(rect=element_rect(fill="transparent"),
         axis.line=element_line(linewidth=unit(0.1, "pt")),
         legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
@@ -579,8 +446,10 @@ print(p_MA_chrom)
 dev.off()
 ```
 
+MA plot for virulence plasmid.
+
 ```{r}
-p_MA_plas <- ggplot(results_fit_cleaned %>% subset(seq=="CP037924.1") %>% arrange(type), aes(x=logCPM+logFC/2, y=logFC)) +
+p_MA_plas <- ggplot(results_fit_cleaned %>% subset(seq=="CP037924.1") %>% arrange(type), aes(x=log2(exp(logCPM+logFC/2)), y=log2(exp(logFC)))) +
   geom_hline(yintercept=0, linetype="dashed") +
   geom_point(aes(col=type, alpha=type), size=1) +
   geom_point(aes(alpha="adv. FDR\u22640.2", col="adv. FDR\u22640.2"), shape=1, size=1.5, data=subset(results_fit_cleaned, FDR<=0.2 & seq=="CP037924.1" & logFC<0)) +
@@ -591,6 +460,7 @@ p_MA_plas <- ggplot(results_fit_cleaned %>% subset(seq=="CP037924.1") %>% arrang
   scale_color_manual(name="", values=cb_palette2[c(3,6,4,5,2,1)], breaks=c("CDS", "pseudo", "adv. FDR\u22640.2", "detr. FDR\u22640.2", paste0("adv. FDR\u2264", p_max), paste0("detr. FDR\u2264", p_max), paste0("FDR\u2264", p_max))) +
   scale_alpha_manual(name="", values=c(0.35, 0.6, 1, 1, 1, 1), breaks=c("CDS", "pseudo", "adv. FDR\u22640.2", "detr. FDR\u22640.2", paste0("adv. FDR\u2264", p_max), paste0("detr. FDR\u2264", p_max), paste0("FDR\u2264", p_max))) +
   scale_x_continuous(name="logCPM") +
+  scale_y_continuous(name="logFC") +
   theme(rect=element_rect(fill="transparent"),
         axis.line=element_line(linewidth=unit(0.1, "pt")),
         legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
@@ -603,6 +473,8 @@ print(p_MA_plas)
 dev.off()
 ```
 
+Chromosomal positions of (significant) log2FC
+
 ```{r}
 dfit_NZ <- dfit_NZ %>% mutate(bin=ceiling(pos/500)*500)
 dfit_NZ$bin[which(dfit_NZ$seq=="CP037924")] <- dfit_NZ$bin[which(dfit_NZ$seq=="CP037924")]
@@ -612,7 +484,7 @@ base_data$x_min <- 0
 
 offset <- 0.1
 results_fit_cleaned$x_coord <- results_fit_cleaned$start
-results_fit_cleaned$logFC_plot <- results_fit_cleaned$logFC
+results_fit_cleaned$logFC_plot <- log2(exp(results_fit_cleaned$logFC))
 results_fit_cleaned$logFC_plot[which(results_fit_cleaned$logFC<0)] <- results_fit_cleaned$logFC_plot[which(results_fit_cleaned$logFC<0)] - offset
 results_fit_cleaned$logFC_plot[which(results_fit_cleaned$logFC>0)] <- results_fit_cleaned$logFC_plot[which(results_fit_cleaned$logFC>0)] + offset
 results_fit_cleaned$ymin <- offset
@@ -622,7 +494,7 @@ p_pos_chrom <- ggplot(results_fit_cleaned %>% subset(seq=="CP037923.1")) +
   geom_segment(aes(x=x_coord, y=ymin, xend=x_coord, yend=logFC_plot, col=(logFC>0))) +
   geom_segment(aes(x=x_coord, y=ymin, xend=x_coord, yend=logFC_plot), col="red", data=subset(results_fit_cleaned, seq=="CP037923.1" & FDR <= p_max), inherit.aes=F) +
   coord_polar() +
-  scale_color_manual(values=c(viridis(1), "gray", "gray")) +
+  scale_color_manual(values=c(cb_palette[1], "gray", "gray")) +
   theme_minimal(base_size=10) +
   scale_x_continuous(breaks=(0:4)*1e6) +
   ylim(c(-10, 1)) +
@@ -648,7 +520,7 @@ p_pos_plas <- ggplot(results_fit_cleaned %>% subset(seq=="CP037924.1")) +
   geom_segment(aes(x=x_coord, y=ymin, xend=x_coord, yend=logFC_plot, col=(logFC>0))) +
   geom_segment(aes(x=x_coord, y=ymin, xend=x_coord, yend=logFC_plot), col="red", data=subset(results_fit_cleaned, seq=="CP037924.1" & FDR <= p_max), inherit.aes=F) +
   coord_polar() +
-  scale_color_manual(values=c(viridis(1), "gray", "gray")) +
+  scale_color_manual(values=c(cb_palette[1], "gray", "gray")) +
   theme_minimal() +
   scale_x_continuous(breaks=(0:2)*1e5) +
   ylim(c(-10, 1)) +
@@ -668,71 +540,11 @@ print(p_pos_plas)
 dev.off()
 ```
 
-```{r, warning=F}
-load(paste0(norm_dir, "p_pca.Rdata"))
-load(paste0(norm_dir, "p_norm1.Rdata"))
-load(paste0(norm_dir, "p_frac0.Rdata"))
-t_chrom <- cowplot::ggdraw() + 
-  cowplot::draw_label(
-    "Chromosome",
-    x = 0,
-    hjust = 0,
-    size = 10
-  )
-t_plas <- cowplot::ggdraw() + 
-  cowplot::draw_label(
-    "Plasmid",
-    x = 0,
-    hjust = 0,
-    size = 10
-  )
-p_figS2 <- cowplot::plot_grid(
-  cowplot::plot_grid(p_pi, NULL, p_pca, ncol=3, rel_widths = c(0.35,0.4,0.35), scale=c(0.6,0.9, 0.9), labels=c("C", "D", "E"), label_fontface="plain"),
-  cowplot::plot_grid(p_norm1, p_frac0, p_drop, scale=0.9, rel_widths=c(0.25, 0.32,0.18), ncol=3, labels=c("F", "G", "H"), label_fontface="plain"),
-  cowplot::plot_grid(p_h0_pseudo, p_FDR, p_z_TIS, scale=0.9, ncol=3, labels=c("I", "J", "K"), label_fontface="plain"),
-  ncol=1, rel_heights=c(0.7, 0.5, 0.5), scale=1)
-print(p_figS2)
-cairo_pdf(paste(res_dir, "figure_S2.pdf", sep=""), width = 6.5, height = 5, bg="transparent")
-print(p_figS2)
-dev.off()
-```
-
-```{r, warning=F}
-p_figS2 <- cowplot::plot_grid(
-  cowplot::plot_grid(p_h0, p_FDR, p_z_TIS, scale=0.95, ncol=3, labels=c("A", "B", "C"), label_fontface="plain"),
-  cowplot::plot_grid(t_chrom, t_plas, scale=0.7, labels=c("D", ""), label_fontface="plain"),
-  cowplot::plot_grid(p_pos_chrom, p_pos_plas, scale=c(0.85, 0.6), rel_widths=c(1,0.7)),
-  ncol=1, rel_heights=c(0.5, 0.1, 0.8))
-print(p_figS2)
-cairo_pdf(paste(res_dir, "figure_S3.pdf", sep=""), width = 6.5, height = 5, bg="transparent")
-print(p_figS2)
-dev.off()
-```
-
-```{r}
-p_fig2 <- cowplot::plot_grid(
-  p_model,
-  cowplot::plot_grid(t_chrom, t_plas, scale=c(0.7, 0.7)),
-  cowplot::plot_grid(p_MA_chrom, p_MA_plas, scale=c(0.95, 0.95)),
-  ncol=1, rel_heights=c(1, 0.1, 1))
-print(p_fig2)
-cairo_pdf(paste(res_dir, "figure_2.pdf", sep=""), width = 6.9, height = 6, bg="transparent")
-print(p_fig2)
-dev.off()
-```
-
-## Discussion
-With only few exceptions, almost all genes with an important role in infection seem to be located on the virulence plasmid. Adding additional parameters for batch effects to the model might increase the sensitivity and help us discover other genes with an important role in infection.
-
-In addition to mutations which are detrimental during infection, we find a number of mutants which seem to have a positive effect on infection. Among them, we identify the LPS biosynthesis genes waaD, waaJ, waaO. Even though these genes are considered essential during cultivation in media (Tryptic Soy Broth, Freed et al. 2016) and start of with very low counts, insertion sites in these genes have a statistically significant positive log-fold change and a decreased risk of dropout which suggests that they are beneficial for the infection process. Also mutations in the redox-sensitive transcriptional activator soxR lead to an increased fitness during infection.
-
-## Diagnostics for the MCMC sampling
+Diagnostics for the MCMC sampling, pair plots can inform about correlations between parameters and divergent transitions.
 
 ```{r}
 np <- extract_np(results_samples, n_iter=1000)
 ```
-
-I have picked an example here check whether the logFC and the gene-wise dropout rate are correlated during the sampling. Since they are not correlated, the statistical model seems to decide well between zeros due to dropout and zeros of statistical origin.
 
 ```{r}
 plot_pairs(paste(res_dir, "pairs_hyperparameters.pdf", sep=""), results_samples, np, c("a.1", "mu_rho", "sigma_rho", "inv_rho_g.1"))

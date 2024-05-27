@@ -11,6 +11,8 @@ output:
 # set result directory for plots etc.
 res_dir <- "../results/pilot_experiments/"
 data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
 
 ## Bioconductor
 library('edgeR')
@@ -25,6 +27,7 @@ library(extrafont)
 # fonts()
 loadfonts()
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 source("../R/utils.R")
@@ -146,13 +149,13 @@ df_40samples$lab[which(df_40samples$n_TIS==20)] <-
          " genes")
 df_40samples$x <- 1.55
 df_40samples$x[which(df_40samples$n_TIS %in% c(20))] <- 1
-fwrite(df_40samples, paste0(res_dir, "sim40samples_run2.csv"), quote=T)
+fwrite(df_40samples, paste0(data_dir, "sim40samples_run2.csv"), quote=T)
 ```
 
 Plot the number of insertion sites per gene for 40 parallel infections with 3,000 insertion sites each (in the input)
 
 ```{r}
-df_40samples <- fread(paste0(res_dir, "sim40samples.csv"), data.table=F, quote="\"")
+df_40samples <- fread(paste0(data_dir, "sim40samples.csv"), data.table=F, quote="\"")
 p_pi <- df_40samples %>% ggplot() +
   geom_bar(aes(x=1, y=value, fill=n_TIS), col="black", stat="identity", alpha=1) +
   geom_text(aes(x=x, y=value_sum, label=lab), size=2.25) +

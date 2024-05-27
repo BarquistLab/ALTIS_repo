@@ -24,6 +24,7 @@ meta_data$length <- meta_data$end - meta_data$start + 1
 ```{r setup, results="hide"}
 ## CRAN
 library(knitr)
+library(Cairo)
 
 library(ggplot2)
 library(ggcorrplot)
@@ -31,7 +32,6 @@ library(ggcorrplot)
 library(tidyverse)
 library(data.table)
 
-library(cmdstanr)
 library(bayesplot)
 library(posterior)
 library(rstan)
@@ -45,6 +45,7 @@ source("../R/prepare_data.R")
 source("../R/analyze_stanfit.R")
 source("../R/utils.R")
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570", "#F0845D")
@@ -254,6 +255,33 @@ print(p_corr)
 cairo_pdf(paste(res_dir, "shigella_corr_mat.pdf", sep=""), width = 2.5, height = 2.5)
 print(p_corr)
 dev.off()
+```
+
+```{r}
+cond_rm11 <- cond %>% subset(exp_id<3 | exp_id>41) %>% arrange(exp_id, condition)
+sample_corr <- sample_corr[cond_rm11$sample, cond_rm11$sample]
+sample_corr <- cbind(sample_corr, Lib4_INPUT=rep(0,12))
+sample_corr <- rbind(sample_corr, Lib4_INPUT=rep(0,13))
+sample_corr <- sample_corr[order(rownames(sample_corr)), order(colnames(sample_corr))]
+p_corr_zoom <- ggcorrplot(sample_corr, outline.col = "white", colors=c(cb_palette3[1], "white", cb_palette3[2]))
+
+p_corr_zoom <- p_corr_zoom +
+  scale_x_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
+  scale_y_discrete(name="Library", breaks=paste0("Lib", c(1,2,3,42,43), "_INPUT"), labels=c(1,2,"",42,43)) +
+  # ggtitle("Normalization") +
+  theme_bw(base_size=10) +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")), axis.title=element_blank(),
+        legend.position="none", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.4,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), strip.text = element_blank(), panel.spacing = unit(0.1, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_corr_zoom)
+cairo_pdf(paste(res_dir, "shigella_corr_mat_small.pdf", sep=""), width = 1.1, height = 1, bg="transparent")
+print(p_corr_zoom)
+dev.off()
+
+save(p_corr_zoom, file=paste0(res_dir, "p_corr_zoom.Rdata"))
 ```
 
 Remove TIS from intergenic regions and replace read counts lower than 20 by zero. The sequencing depth is so high that TIS with fewer than 20 counts should be treated in the same way as zeros. Since the zero-inflated negative binomial (ZINB) model treats low counts fundamentally different from zero, this step is necessary to assure that the ZINB is an adequat description of the data

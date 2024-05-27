@@ -61,7 +61,7 @@ For additional packages required for the model comparison script, consult the "D
 
 ### List of workflows
 
-In the directory **scripts**, you can find the Rmd files to analyze organoid infections with a Shigella Tn5 mutant library [^f1].
+In the directory **scripts**, you can find the Rmd files to analyze organoid infection assays with a Shigella Tn5 mutant library [^f1]. The files have been tested with R 4.3 and 4.4.
 
 <div class="columns-2">
   

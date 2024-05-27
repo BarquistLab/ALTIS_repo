@@ -1,21 +1,35 @@
-// ZINB model for the analysis of TraDIS data
-// uses pre-determined dropout rates fitted to neutral/pseudo genes
-// center logFC around zero, can be set to zero
-// models abundance dependent dispersion
+// ZINB model for the normalization of a TraDIS infection screen
+// Fit this model to neutral genes (e.g. pseudo-genes)
+// to normalize the data and to determine the coefficients of 
+// the abundance dependent stochastic (technical) loss
 functions {
+  // number of zero entries in array y
   int num_zeros(array[] int y) {
     int value = 0;
     for (n in 1:size(y)) value += (y[n] == 0);
     return value;
   }
   
+  // number of negative entries in array y
   int num_neg(array[] int y) {
     int value = 0;
     for (n in 1:size(y)) value += (y[n] < 0);
     return value;
   }
   
+  // returns only input-output pairs where the input
+  // transposon insertion site (TIS) is non-zero
+  // arguments:
+  // it_g: gene index of TIS in y_in and y_out
+  // y_in: input counts of TIS
+  // y_out: output counts of TIS
+  // N_nonzero: number of non-zero input counts, determined by
+  // running num_zeros on y_in before.
   array[] int y_nonzero(array[] int it_g, array[] int y_in, array[] int y_out, int N_nonzero) {
+    // return value has 3 times the length of the number of non-zero entries in y_in
+    // 1:N_nonzero : gene index
+    // (N_nonzero+1):(2*N_nonzero) : non-zero input count
+    // (2*N_nonzero+1):(3*N_nonzero) : output count, may be zero
     array[3*N_nonzero] int nonzero;
     int counter = 1;
     for (n in 1:size(y_in)) {
@@ -29,6 +43,8 @@ functions {
     return nonzero;
   }
   
+  // zero-inflated negative binomial model which is run in parallel for every pair of
+  // input-output sequencing libraries
   vector zinb_model(vector param, vector theta, array[] real X, array[] int y){
     
     int N_ti = y[1]; // number of non-zero input TIs

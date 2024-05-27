@@ -51,6 +51,7 @@ library(extrafont)
 # fonts()
 loadfonts()
 
+# Changing the font to Arial might not always work. Choose other font instead.
 theme_set(theme_bw(base_size = 10, base_family="Arial"))
 
 cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570")
