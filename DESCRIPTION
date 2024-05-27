@@ -32,5 +32,5 @@ Imports:
     MASS
 Suggests:
     cmdstanr,
-RoxygenNote: 7.2.3
+RoxygenNote: 7.3.1
 URL: http://github.com/BarquistLab/Shigella_TraDIS_repo
