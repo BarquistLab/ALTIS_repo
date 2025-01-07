@@ -52,7 +52,7 @@ functions {
     array[N_ti] int Y_out = y[(N_ti+3):(2*N_ti+2)]; // output read counts per TIS
     
     vector[N_ti] alpha_ti = to_vector(X[1:N_ti]); // normalized input log-counts
-    real alpha_out_mean = X[1+N_ti// maximum difference from library-wise input log-count
+    real alpha_out_mean = X[1+N_ti];// maximum difference from library-wise input log-count
     real alpha_max = X[2+N_ti]; // library-wise maximum of normalized input log-counts
     real b = X[4+N_ti]; // abundance correction of dispersion
     array[2] real a = X[(5+N_ti):(6+N_ti)];

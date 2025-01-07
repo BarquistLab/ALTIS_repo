@@ -1,0 +1,423 @@
+---
+title: "Demo analysis for TraDIS infection screens with cmdstanr"
+author: "Laura Jenniches"
+date: "24/5/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, warning=F}
+knitr::opts_chunk$set(warning=F, message=F)
+```
+
+```{r global-options, include=FALSE}
+# set result directory for plots etc.
+res_dir <- "../results/demo/"
+data_dir <- "../data/"
+if(!dir.exists("../results")) dir.create("../results")
+if(!dir.exists(res_dir)) dir.create(res_dir)
+
+# load meta data for Shigella
+meta_data <- read.table("../annotations/Shigella_meta_combined.csv", header=T, sep="\t", quote="\"", stringsAsFactors=F)
+seq_list <- unique(meta_data$seq)
+n_seq <- length(seq_list)
+meta_data$length <- meta_data$end - meta_data$start + 1
+```
+
+```{r setup, results="hide"}
+## CRAN
+library(ggplot2)
+library(viridis)
+
+library(tidyverse)
+library(data.table)
+
+library(cmdstanr)
+library(bayesplot)
+
+source("../R/prepare_data.R")
+source("../R/analyze_stanfit.R")
+source("../R/utils.R")
+
+# Changing the font to Arial might not always work. Choose other font instead.
+theme_set(theme_bw(base_size = 10))
+
+cb_palette <- c("#864C95", "#5876A3", "#9BD0BB", "#FFD966", "#E76570", "#F0845D")
+cb_palette2 <- c("#5876A3", "#F0845D", "gray", "darkred", "darkblue", "#9BD0BB")
+cb_palette3 <- c("#424242", "#d36c6c")
+```
+
+
+Load demo count data. counts_pseudo_demo.csv contains 50 selected (neutral) pseudo genes. counts_all_demo.csv contains 50 selected genes for which the fitness scores will be determined.
+
+```{r}
+lab <- "pseudo_demo"
+counts_file <- paste0(data_dir, "counts_", lab, ".csv.gz")
+data_table_pseudo_demo <- fread(counts_file, data.table=F)
+
+lab <- "all_demo"
+counts_file <- paste0(data_dir, "counts_", lab, ".csv.gz")
+data_table_demo <- fread(counts_file, data.table=F)
+
+sample_labs <- colnames(data_table_demo)[grep("INPUT|OUTPUT", colnames(data_table_demo))]
+sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% factor(levels=sample_labs) %>% as.numeric)
+```
+
+Create dfit files which contain the information required for the stan model.
+
+```{r}
+lab <- "all_demo"
+create_dfit(data_table_demo, sample_stats, lab, description="", res_dir)
+
+lab <- "pseudo_demo"
+create_dfit(data_table_pseudo_demo, sample_stats, lab, description="", res_dir)
+```
+
+Create data list for cmdstanr (normalization).
+
+```{r}
+lab_in <- "INPUT"
+lab_out <- "OUTPUT"
+lab <- "pseudo_demo"
+dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
+
+# import data prepared for cmdstanr
+dfit_NZ <- fread(dfit_file, data.table=F)
+
+# for neutral (pseudo) genes: calculate number of non-zero (N_nz) insertion sites in output, 
+sample_stats <- subset(dfit_NZ, type=="pseudo") %>% group_by(exp_id, sample) %>%
+  summarise(N_nz=length(which(raw_out>0)), n_g=length(raw),
+            N_in=mean(N), N_out=mean(N_out))
+# fraction of pseudo genes with zero count in output as compared to input
+sample_stats$Z <- (sample_stats$n_g-sample_stats$N_nz)/sample_stats$n_g
+
+# tables with input and output raw counts with correctly ordered genes and samples
+raw_counts_in <- t(data_table_pseudo_demo[, sample_stats$sample])
+raw_counts_out <- t(data_table_pseudo_demo[, sub(lab_in, lab_out, sample_stats$sample)])
+  
+# gene id
+it_g <- data_table_pseudo_demo$it_g
+# total number of transposon insertions
+N_ti <- length(it_g)
+# total number of genes (should be 50 in demo)
+N_g <- max(it_g)
+# fraction of zero counts in pseudo genes
+Z_ps <- sample_stats$Z
+# number of input-output pairs
+N_exp <- length(Z_ps)
+# calculate sample statistics
+sample_stats <- dfit_NZ %>% group_by(exp_id, sample) %>% summarise(N_nz=length(which(raw_out>0)), n_g=length(raw), N_in=mean(N), N_out=mean(N_out))
+# maximum number of insertion sites per gene
+N_ti_max <- max(sample_stats$n_g)
+
+data_list <- list(
+  N_ti=N_ti,
+  N_g=N_g,
+  N_exp=N_exp,
+  Z_ps=Z_ps,
+  it_g=it_g,
+  raw_counts_in=raw_counts_in,
+  raw_counts_out=raw_counts_out,
+  N_ti_max=N_ti_max
+)
+```
+
+Run cmdstan and save fit results. Alternatively, data can be exported with stan_rdump (see example_cmdstan.Rmd).
+Make sure cmdstan is installed: https://mc-stan.org/cmdstanr/articles/cmdstanr.html
+
+```{r}
+# check_cmdstan_toolchain()
+# install_cmdstan(cores = 2)
+stan_file <- paste0(getwd(), "/../stan_models/ZINB_pair2_norm.stan")
+mod <- cmdstan_model(stan_file, pedantic=F)
+
+json_file <- tempfile(fileext = ".json")
+write_stan_json(data_list, json_file)
+
+# fit model with cmdstan
+fit0 <- mod$sample(data = json_file, chains = 2, adapt_delta = 0.95, parallel_chains = 2, iter_warmup = 1000, iter_sampling = 1000, max_treedepth = 12)
+
+# save fitted model
+fit0$save_object(file = paste0(res_dir, "fit_norm.RDS"))
+rm(fit0)
+```
+
+Bayesian diagnostics
+
+```{r}
+# load fitted model
+fit0 <- readRDS(paste0(res_dir, "fit_norm.RDS"))
+
+# use the bayesplot packages to check for divergent transitions and correlations between parameters
+# Pairs plots
+x <- fit0$draws()
+i <- "norm_1"
+p <- mcmc_pairs(x, pars = paste0("inv_rho_g[", 1:5, "]"),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "pairs_", i, ".pdf", sep=""), width = 7, height = 7)
+print(p)
+dev.off()
+png(paste(res_dir, "pairs_", i, ".png", sep=""), width = 400, height = 400)
+print(p)
+dev.off()
+i <- "norm_2"
+p <- mcmc_pairs(x, pars = c("mu_rho", "mu", "sigma_rho"),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "pairs_", i, ".pdf", sep=""), width = 7, height = 7)
+print(p)
+dev.off()
+png(paste(res_dir, "pairs_", i, ".png", sep=""), width = 400, height = 400)
+print(p)
+dev.off()
+
+# trace plots to check whether the model fit has converged and whether all chains agree
+p <- mcmc_trace(x, pars = paste0("inv_rho_g[", 1:6, "]"),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "trace_", i, ".pdf", sep=""), width = 7, height = 4)
+print(p)
+dev.off()
+png(paste(res_dir, "trace_", i, ".png", sep=""), width = 400, height = 250)
+print(p)
+dev.off()
+
+i <- "norm"
+p <- mcmc_nuts_energy(nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "nuts_energy_", i, ".pdf", sep=""), width = 7, height = 3)
+print(p)
+dev.off()
+png(paste(res_dir, "nuts_energy_", i, ".png", sep=""), width = 400, height = 200)
+print(p)
+dev.off()
+```
+
+Extract technical parameters from ZINB_pair2_norm.stan
+
+```{r}
+# load fitted model
+fit0 <- readRDS(paste0(res_dir, "fit_norm.RDS"))
+
+sample_labs <- colnames(data_table_demo)[grep("INPUT|OUTPUT", colnames(data_table_demo))]
+sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% factor(levels=sample_labs) %>% as.numeric)
+
+sample_stats <- sample_stats %>% arrange(exp_id)
+norm_fac <- fit0$draws(variables=c("norm_fac"), format="matrix") %>% apply(2, median)
+sample_stats$norm_fac <- rep(norm_fac, each=2)
+a_in <- fit0$draws(variables=c("a"), format="matrix") %>% apply(2, median)
+b <- fit0$draws(variables=c("b"), format="matrix") %>% apply(2, median)
+```
+
+Export full dataset (Shigella_all_data.R) to res_dir and save normalized read counts in a long dataframe (dfit_NZ_norm.csv). Run the Stan model ZINB_pair2_logFC.stan with cmdstan and copy the resulting csv file to data_dir. Alternatively, use our cmdstan results provided in the data_dir directory.
+
+```{r}
+lab_in <- "INPUT"
+lab_out <- "OUTPUT"
+lab <- "all_demo"
+dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
+
+# import data prepared for cmdstanr
+dfit_NZ <- fread(dfit_file, data.table=F)
+dfit_NZ$n_ps <- sample_stats$norm_fac[match(dfit_NZ$sample, sample_stats$sample)]
+dfit_NZ_pseudo <- fread(paste0(res_dir, "dfit_pseudo_demo.csv"))
+
+# for neutral (pseudo) genes: calculate number of non-zero (N_nz) insertion sites in output, 
+sample_stats <- dfit_NZ_pseudo %>% group_by(exp_id, sample) %>%
+  summarise(N_nz=length(which(raw_out>0)), n_g=length(raw),
+            N_in=mean(N), N_out=mean(N_out))
+# fraction of pseudo genes with zero count in output as compared to input
+sample_stats$Z <- (sample_stats$n_g-sample_stats$N_nz)/sample_stats$n_g
+
+# tables with input and output raw counts with correctly ordered genes and samples
+raw_counts_in <- t(data_table_demo[, sample_stats$sample])
+raw_counts_out <- t(data_table_demo[, sub(lab_in, lab_out, sample_stats$sample)])
+  
+# gene id
+it_g <- data_table_demo$it_g
+# total number of transposon insertions
+N_ti <- length(it_g)
+# total number of genes (should be 50 in demo)
+N_g <- max(it_g)
+# fraction of zero counts in pseudo genes
+Z_ps <- sample_stats$Z
+# number of input-output pairs
+N_exp <- length(Z_ps)
+# calculate sample statistics
+sample_stats <- dfit_NZ %>% group_by(exp_id, sample) %>% summarise(N_nz=length(which(raw_out>0)), n_g=length(raw), N_in=mean(N), N_out=mean(N_out))
+# maximum number of insertion sites per gene
+N_ti_max <- max(sample_stats$n_g)
+
+data_list <- list(
+  N_ti=N_ti,
+  N_g=N_g,
+  N_exp=N_exp,
+  Z_ps=Z_ps,
+  it_g=it_g,
+  raw_counts_in=raw_counts_in,
+  raw_counts_out=raw_counts_out,
+  N_ti_max=N_ti_max,
+  norm_fac=norm_fac,
+  a_in=a_in,
+  b=b
+)
+```
+
+```{r}
+# check_cmdstan_toolchain()
+# install_cmdstan(cores = 2)
+stan_file <- paste0(getwd(), "/../stan_models/ZINB_pair2_logFC.stan")
+mod <- cmdstan_model(stan_file, pedantic=F)
+
+json_file <- tempfile(fileext = ".json")
+write_stan_json(data_list, json_file)
+
+# fit model with cmdstan
+fit0 <- mod$sample(data = json_file, chains = 2, adapt_delta = 0.95, parallel_chains = 2, iter_warmup = 1000, iter_sampling = 1000, max_treedepth = 12)
+
+# save fitted model
+fit0$save_object(file = paste0(res_dir, "fit_logFC.RDS"))
+rm(fit0)
+```
+
+Bayesian diagnostics
+
+```{r}
+# load fitted model
+fit0 <- readRDS(paste0(res_dir, "fit_logFC.RDS"))
+
+# use the bayesplot packages to check for divergent transitions and correlations between parameters
+# Pairs plots
+x <- fit0$draws()
+i <- "logFC_1"
+p <- mcmc_pairs(x, pars = c("mu_rho", paste0("inv_rho_g[", 1:4, "]")),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "pairs_", i, ".pdf", sep=""), width = 7, height = 7)
+print(p)
+dev.off()
+png(paste(res_dir, "pairs_", i, ".png", sep=""), width = 400, height = 400)
+print(p)
+dev.off()
+i <- "logFC_2"
+p <- mcmc_pairs(x, pars = c("mu", paste0("logFC_g[", 1:4, "]")),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "pairs_", i, ".pdf", sep=""), width = 7, height = 7)
+print(p)
+dev.off()
+png(paste(res_dir, "pairs_", i, ".png", sep=""), , width = 400, height = 400)
+print(p)
+dev.off()
+
+# trace plots to check whether the model fit has converged and whether all chains agree
+p <- mcmc_trace(x, pars = c("mu", paste0("logFC_g[", 1:5, "]")),
+           off_diag_args = list(size = 1, alpha = 0.5), np=nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "trace_", i, ".pdf", sep=""), width = 7, height = 4)
+print(p)
+dev.off()
+png(paste(res_dir, "trace_", i, ".png", sep=""), width = 400, height = 250)
+print(p)
+dev.off()
+
+i <- "logFC"
+p <- mcmc_nuts_energy(nuts_params(fit0))
+print(p)
+cairo_pdf(paste(res_dir, "nuts_energy_", i, ".pdf", sep=""), width = 7, height = 3)
+print(p)
+dev.off()
+png(paste(res_dir, "nuts_energy_", i, ".png", sep=""), width = 400, height = 200)
+print(p)
+dev.off()
+```
+
+```{r}
+# load fitted model
+fit0 <- readRDS(paste0(res_dir, "fit_logFC.RDS"))
+
+gene_stats <- dfit_NZ %>% group_by(locus_tag, it_g) %>% summarise(n_gz=length(which(raw_out==0)), n_g=length(raw), logcpm_in=mean(log(raw*n_ps)))
+gene_stats$drop_out <- gene_stats$n_gz/gene_stats$n_g
+
+results_fit <- data.frame(
+  locus_tag = data_table_demo$locus_tag %>% unique()
+)
+results_fit$start <- meta_data$start[match(results_fit$locus_tag, meta_data$locus_tag)]
+results_fit$seq <- meta_data$seq[match(results_fit$locus_tag, meta_data$locus_tag)]
+
+results_fit$length <- meta_data$length[match(results_fit$locus_tag, meta_data$locus_tag)]
+results_fit$type <- meta_data$type[match(results_fit$locus_tag, meta_data$locus_tag)]
+results_fit$com_id <- meta_data$com_id[match(results_fit$locus_tag, meta_data$locus_tag)]
+results_fit$description <- meta_data$description[match(results_fit$locus_tag, meta_data$locus_tag)]
+
+results_fit$n_TIS <- gene_stats$n_g[match(results_fit$locus_tag, gene_stats$locus_tag)]
+results_fit$n_nz <- gene_stats$n_g[match(results_fit$locus_tag, gene_stats$locus_tag)] - gene_stats$n_gz[match(results_fit$locus_tag, gene_stats$locus_tag)]
+results_fit$logCPM <- gene_stats$logcpm_in[match(results_fit$locus_tag, gene_stats$locus_tag)]
+
+results_fit$inv_rho_g <- fit0$draws(variables=c("inv_rho_g"), format="matrix") %>% apply(2, median)
+
+results_fit$logFC <- fit0$draws(variables=c("logFC_g"), format="matrix") %>% apply(2, median)
+results_fit$sd_logFC <- fit0$draws(variables=c("logFC_g"), format="matrix") %>% apply(2, sd)
+logFC_pseudo <- results_fit %>% subset(type=="pseudo") %>% pull(logFC) %>% median()
+results_fit$p_value <- fit0$draws(variables=c("logFC_g"), format="matrix") %>% apply(2, function(x) p_value(x, int0=0))
+results_fit$bayes_factor <- fit0$draws(variables=c("logFC_g"), format="matrix") %>% apply(2, function(x) Bayes_factor(x, mu=0, sigma=5))
+results_fit$z <- results_fit$logFC/results_fit$sd_logFC
+
+results_fit <- results_fit %>% subset(n_TIS>2)
+results_fit$FDR <- 1
+results_fit$FDR[which(results_fit$z<=0)] <- calc_FDR_z(results_fit$z[which(results_fit$z<=0)], p0=0.7, sd=0.8)
+results_fit$FDR[which(results_fit$z>0)] <- calc_FDR_z(-results_fit$z[which(results_fit$z>0)], p0=0.7, sd=0.8)
+```
+
+Some figures
+
+```{r}
+results_fit_cleaned <- results_fit
+plot_df <- rbind(data.frame(z=rnorm(1e5, 0, 0.8), type="prior"),
+                 results_fit_cleaned[,c("z", "type")]) %>% arrange(type)
+plot_df$type <- plot_df$type %>% factor(levels=c("CDS", "pseudo", "prior", "h0"))
+
+p_h0 <- ggplot() +
+  geom_histogram(aes(x=z, fill=type!="prior", col=type!="prior", alpha=type!="prior"), linetype="solid", breaks=(-30:30)/3, data=subset(plot_df, type %in% c("CDS", "pseudo"))) +
+  geom_density(aes(x=z, y=0.7*nrow(results_fit_cleaned)*(..density..)/3, fill=type!="prior", col=type!="prior", alpha=type!="prior"), linetype="solid", data=subset(plot_df, type=="prior")) +
+  scale_color_manual(name="", breaks=c(T, F), labels=c("data", "h0"), values=cb_palette[c(4,5,5)]) +
+  scale_fill_manual(name="", breaks=c(T, F), labels=c("data", "h0"), values=cb_palette[c(4,5,5)]) +
+  scale_alpha_manual(name="", breaks=c(T, F), labels=c("data", "h0"), values=c(0.4, 0, 0)) +
+  scale_x_continuous(name=expression(z[logFC]), limits=c(-10, 10)) +
+  scale_y_continuous(name="count") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_h0)
+cairo_pdf(paste(res_dir, "z_values_h0.pdf", sep=""), width = 3, height = 2.2)
+print(p_h0)
+dev.off()
+```
+```{r}
+# MA plot
+p_MA <- ggplot(results_fit_cleaned %>% arrange(type), aes(x=log2(exp(logCPM+logFC/2)), y=log2(exp(logFC)))) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_point(aes(col=type, alpha=type), size=0.5) +
+  geom_point(aes(alpha="FDR\u22640.2", col="FDR\u22640.2"), shape=1, size=1, data=subset(results_fit_cleaned, FDR<=0.2)) +
+  geom_point(aes(alpha=paste0("FDR\u2264", p_max), col=paste0("FDR\u2264", p_max)), shape=1, size=1, data=subset(results_fit_cleaned, FDR<=p_max)) +
+  geom_text(aes(alpha=paste0("FDR\u2264", p_max), col=paste0("FDR\u2264", p_max), label=com_id), data=subset(results_fit_cleaned, FDR<=0.01), size=2.5) +
+  scale_color_manual(values=cb_palette2[c(3,6,4,2)], breaks=c("CDS", "pseudo", "FDR\u22640.2", paste0("FDR\u2264", p_max))) +
+  scale_alpha_manual(values=c(0.35, 0.6, 1, 1), breaks=c("CDS", "pseudo", "FDR\u22640.2", paste0("FDR\u2264", p_max))) +
+  scale_x_continuous(name="logCPM") +
+  scale_y_continuous(name="logFC") +
+  theme(rect=element_rect(fill="transparent"),
+        axis.line=element_line(linewidth=unit(0.1, "pt")),
+        legend.position="top", legend.margin=margin(t=-0.2, b=-0.2, unit="cm"),
+        legend.key.width=unit(0.3,"cm"),legend.key.height=unit(0.3,"cm"),
+        strip.background = element_blank(), panel.spacing = unit(0, "lines"),
+        panel.grid=element_blank(), axis.text=element_text(color = "black"))
+print(p_MA)
+cairo_pdf(paste(res_dir, "logFC_abundance.pdf", sep=""), width = 3, height = 3)
+print(p_MA)
+dev.off()
+```
