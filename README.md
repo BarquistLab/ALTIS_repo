@@ -37,10 +37,10 @@ After installing cmdstan, create a directory for the Stan model within the cmdst
 
 4. **Fitting the Stan model**
 
-Below, we explain how to export the sequencing data to the R dump file RIF-seq_data.R. Alternatively, the JSON format can be used. After formatting the data, fit the decay rates using the following command
+Below, we explain how to export the sequencing data to the R dump file Shigella_pseudo_data.R. Alternatively, the JSON format can be used. After formatting the data, fit the decay rates using the following command
 
 ```
-./LNM sample data file=RIF-seq_data.R
+./LNM sample data file=Shigella_pseudo_data.R
 ```
 
 Refer to the cmdstan instructions: https://mc-stan.org/docs/2_31/cmdstan-guide/mcmc-intro.html. The models have been tested with 1000 warmup iterations and 1000 sampling iterations.
