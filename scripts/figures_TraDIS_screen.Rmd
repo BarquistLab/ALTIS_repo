@@ -62,7 +62,7 @@ Load cmdstan results from ZINB_pair2_logFC.stan
 Load "long" data frame with count data (one insertion site per row including input/output counts and meta data like normalization factor).
 
 ```{r}
-lab <- "all_Bnorm"
+lab <- "all"
 dfit_NZ <- fread(paste0(norm_dir, "dfit_NZ_norm.csv"), quote=F, data.table=F)
 results_samples <- rbind(
   cbind(fread(cmd=sprintf('zcat %s | grep -v "#"', paste(data_dir, "Shigella_", lab, "_1.csv.gz", sep="")), quote=F, data.table=F), Chain=1),

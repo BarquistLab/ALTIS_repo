@@ -37,10 +37,16 @@ After installing cmdstan, create a directory for the Stan model within the cmdst
 
 4. **Fitting the Stan model**
 
-Below, we explain how to export the sequencing data to the R dump file Shigella_pseudo_data.R, located in the data directory. Alternatively, the JSON format can be used. After formatting the data, fit the decay rates using the following command
+Below (or see script normalize_TraDIS_screen.Rmd), we explain how to export the sequencing data to the R dump file Shigella_pseudo_data.R, located in the data directory. Alternatively, the JSON format can be used. To normalize the data (~30 min), run
 
 ```
-./LNM sample data file=Shigella_pseudo_data.R
+./ZINB_pair2_norm sample data file=Shigella_pseudo_data.R
+```
+
+To extract the fitness scores (~ 5 h), run
+
+```
+./ZINB_pair2_logFC sample data file=Shigella_all_data.R
 ```
 
 Refer to the cmdstan instructions: https://mc-stan.org/docs/2_31/cmdstan-guide/mcmc-intro.html. The models have been tested with 1000 warmup iterations and 1000 sampling iterations.
@@ -49,7 +55,7 @@ Refer to the cmdstan instructions: https://mc-stan.org/docs/2_31/cmdstan-guide/m
 
 ### Prerequisites
 
-Before running the R scripts, ensure you have the necessary packges installed.
+Before running the R scripts, ensure you have the necessary packages installed.
 
 <div class="columns-2">
   

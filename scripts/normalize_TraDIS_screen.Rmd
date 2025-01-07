@@ -348,7 +348,7 @@ a_in <- apply(results_samples[, c("a.1", "a.2")], 2, median)
 b <- results_samples[,"b"] %>% median
 ```
 
-Export full dataset (Shigella_all_Bnorm_data.R) to res_dir and save normalized read counts in a long dataframe (dfit_NZ_norm.csv). Run the Stan model ZINB_pair2_logFC.stan with cmdstan and copy the resulting csv file to data_dir. Alternatively, use our cmdstan results provided in the data_dir directory.
+Export full dataset (Shigella_all_data.R) to res_dir and save normalized read counts in a long dataframe (dfit_NZ_norm.csv). Run the Stan model ZINB_pair2_logFC.stan with cmdstan and copy the resulting csv file to data_dir. Alternatively, use our cmdstan results provided in the data_dir directory.
 
 ```{r}
 # load count data and export to cmdstan format
@@ -357,7 +357,7 @@ dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
 counts_file <- paste0(res_dir, "counts_", lab, ".csv")
 locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
 
-lab <- "all_Bnorm"
+lab <- "all"
 dfit_NZ <- export_cmdstan(dfit_file, counts_file, data_dir, lab, norm_fac=norm_fac, b=b, a_in=a_in, organism="Shigella")
 dfit_NZ$norm_fac <- sample_stats$norm_fac[match(dfit_NZ$sample, sample_stats$sample)]
 
