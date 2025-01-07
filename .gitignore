@@ -26,3 +26,4 @@
 results/*
 *.Rd
 *.csv
+*_init.R

@@ -301,18 +301,19 @@ sample_stats <- sample_stats_shigella(sample_labs, sample_labs %>% as.factor %>%
 sample_stats$exp_id[which(sample_stats$exp_id>10)] <- sample_stats$exp_id[which(sample_stats$exp_id>10)] - 1
 ```
 
-Export data in cmdstanr format (Shigella_pseudo_data.R, saved in res_dir). For more details, refer to the create_dfit function in prepare_data.R. This step can be skipped when running the script multiple times.
+Here, the data is exported in the correct order for the cmdstan format to assure that the genes in the fit results are ordered in the same way as in the count tables.
 
 ```{r}
 lab <- "all"
-create_dfit(data_table, sample_stats, lab, description="", data_dir)
+create_dfit(data_table, sample_stats, lab, description="", res_dir)
 
 lab <- "pseudo"
 data_table_pseudo <- subset(data_table, type==lab)
-create_dfit(data_table_pseudo, sample_stats, lab, description="", data_dir)
+create_dfit(data_table_pseudo, sample_stats, lab, description="", res_dir)
 ```
 
-Here, we load the count tables, where genes are ordered in the same way as in the exported data for cmdstan. This is important to assure that the index of the cmdstan results can be assigned to the correct gene.
+Export data in cmdstanr format (Shigella_pseudo_data.R, saved in data_dir). For more details, refer to the create_dfit function in prepare_data.R. This step can be skipped when running the script multiple times.
+We load the count tables, where genes are ordered in the same way as in the exported data for cmdstan. This is important to assure that the index of the cmdstan results can be assigned to the correct gene.
 
 ```{r}
 # load count data and export to cmdstan format
@@ -320,7 +321,7 @@ lab <- "pseudo"
 dfit_file <- paste0(res_dir, "dfit_", lab, ".csv")
 counts_file <- paste0(res_dir, "counts_", lab, ".csv")
 locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
-dfit_NZ <- export_cmdstan(dfit_file, counts_file, res_dir, lab, norm_fac=rep(0, 42), organism="Shigella")
+dfit_NZ <- export_cmdstan(dfit_file, counts_file, data_dir, lab, norm_fac=rep(0, 42), organism="Shigella")
 ```
 
 Run the Stan model (ZINB_pair2_norm.stan) with cmdstan. Provide the data file Shigella_pseudo_data.R as input. The resulting csv file should be copied to data_dir. Alternatively, our results from running cmdstan, which are already contained in data_dir, can be used.
