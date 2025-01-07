@@ -24,3 +24,5 @@
 *.stderr
 *.stdout
 results/*
+*.Rd
+*.csv

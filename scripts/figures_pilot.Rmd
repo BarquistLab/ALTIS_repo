@@ -155,7 +155,7 @@ fwrite(df_40samples, paste0(data_dir, "sim40samples_run2.csv"), quote=T)
 Plot the number of insertion sites per gene for 40 parallel infections with 3,000 insertion sites each (in the input)
 
 ```{r}
-df_40samples <- fread(paste0(data_dir, "sim40samples.csv"), data.table=F, quote="\"")
+df_40samples <- fread(paste0(data_dir, "sim40samples.csv.gz"), data.table=F, quote="\"")
 p_pi <- df_40samples %>% ggplot() +
   geom_bar(aes(x=1, y=value, fill=n_TIS), col="black", stat="identity", alpha=1) +
   geom_text(aes(x=x, y=value_sum, label=lab), size=2.25) +
