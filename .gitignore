@@ -27,3 +27,5 @@ results/*
 *.Rd
 *.csv
 *_init.R
+stan_models/ZINB_pair2_logFC
+stan_models/ZINB_pair2_norm
