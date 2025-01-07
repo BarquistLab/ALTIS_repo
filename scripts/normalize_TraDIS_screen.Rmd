@@ -305,11 +305,11 @@ Export data in cmdstanr format (Shigella_pseudo_data.R, saved in res_dir). For m
 
 ```{r}
 lab <- "all"
-create_dfit(data_table, sample_stats, lab, description="", res_dir)
+create_dfit(data_table, sample_stats, lab, description="", data_dir)
 
 lab <- "pseudo"
 data_table_pseudo <- subset(data_table, type==lab)
-create_dfit(data_table_pseudo, sample_stats, lab, description="", res_dir)
+create_dfit(data_table_pseudo, sample_stats, lab, description="", data_dir)
 ```
 
 Here, we load the count tables, where genes are ordered in the same way as in the exported data for cmdstan. This is important to assure that the index of the cmdstan results can be assigned to the correct gene.
@@ -357,7 +357,7 @@ counts_file <- paste0(res_dir, "counts_", lab, ".csv")
 locus_tags <- fread(counts_file, data.table=F) %>% pull("locus_tag") %>% unique
 
 lab <- "all_Bnorm"
-dfit_NZ <- export_cmdstan(dfit_file, counts_file, res_dir, lab, norm_fac=norm_fac, b=b, a_in=a_in, organism="Shigella")
+dfit_NZ <- export_cmdstan(dfit_file, counts_file, data_dir, lab, norm_fac=norm_fac, b=b, a_in=a_in, organism="Shigella")
 dfit_NZ$norm_fac <- sample_stats$norm_fac[match(dfit_NZ$sample, sample_stats$sample)]
 
 gene_stats <- dfit_NZ %>% group_by(locus_tag, it_g) %>% summarise(n_gz=length(which(raw_out==0)), n_g=length(raw), logcpm_in=mean(logcpm))
