@@ -27,7 +27,7 @@ To run the Stan models, various interfaces are available. The choice of interfac
 
 1. **Install cmdstan**
 
-Follow the comprehensive guide https://mc-stan.org/docs/2_31/cmdstan-guide/cmdstan-installation.html . The models have been tested with Stan v2.31.0.
+Follow the comprehensive guide https://mc-stan.org/docs/2_31/cmdstan-guide/cmdstan-installation.html . The models have been tested with Stan v2.31.0. Installing cmdstan takes about 2 min on a desktop computer.
 
 2. **Enable multithreading**
 
@@ -35,7 +35,7 @@ The Stan models use the function ```reduce_sum```. To enhance computation speed,
 
 3. **Compile the Stan model**
 
-After installing cmdstan, create a directory for the Stan model within the cmdstan directory. To compile the model, follow the instructions here: https://mc-stan.org/docs/2_31/cmdstan-guide/compiling-a-stan-program.html .
+After installing cmdstan, create a directory for the Stan model within the cmdstan directory. To compile the model, follow the instructions here: https://mc-stan.org/docs/2_31/cmdstan-guide/compiling-a-stan-program.html . Compiling the Stan models takes ~10 s on a desktop computer.
 
 4. **Fitting the Stan model**
 
