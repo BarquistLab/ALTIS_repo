@@ -60,7 +60,7 @@ https://mc-stan.org/cmdstanr/
 Explanations on how to install cmdstan and get started with cmdstanr are provided here:
 https://mc-stan.org/cmdstanr/articles/cmdstanr.html
 
-## Example workflows
+## Demo workflow
 
 ### Prerequisites
 
@@ -74,9 +74,11 @@ Before running the R scripts, ensure you have the necessary packages installed.
 
 For additional packages required for the model comparison script, consult the "DESCRIPTION" file in the repository.
 
-### List of workflows
+### Rmd file
 
 In the directory **demo**, you can find an Rmd file which demonstrates how to analyze TraDIS infection screens with stochastic mutant loss. The file has been tested with R 4.3 and 4.4. It takes 6-7 min to run on a desktop computer. The required data files are in the data directory. Refer to the PDF file generated with Knit for a short description of the demo workflow including the expected results.
+
+## Reproduce analysis of TraDIS organoid infectino screen
 
 In the directory **scripts**, you can find the Rmd files to analyze organoid infection assays with a Shigella Tn5 mutant library [^f1]. The files have been tested with R 4.3 and 4.4. They take less than 1 min to run on a desktop computer. The required data files are in the data directory.
 
