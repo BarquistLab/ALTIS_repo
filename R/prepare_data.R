@@ -103,3 +103,11 @@ export_cmdstan <- function(dfit_file, counts_file, cmd_dir, lab, lab_in="INPUT",
   rm(raw_counts_in, raw_counts_out, data_table)
   dfit_NZ
 }
+
+# extract sample information from sample name
+sample_stats_shigella <- function(sample, it_sa){
+  sample_df <- data.frame(sample, it_sa)
+  sample_df$it_c <- strsplit(sample %>% as.character(), "_") %>% sapply(function(x) x[2]) %>% as.factor() %>% as.numeric()
+  sample_df$exp_id <- strsplit(sample %>% as.character(), "_") %>% sapply(function(x) sub("Lib", "", x[1])) %>% as.numeric()
+  sample_df
+}
